@@ -30,9 +30,10 @@ from pymoo.core.problem import Problem
 from pymoo.core.variable import Variable
 from pymoo.core.population import Population
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+from sb_arch_opt.uncertainty import UncertainParameter
 from sb_arch_opt.design_space import ArchDesignSpace, ImplicitArchDesignSpace
 
-__all__ = ['ArchOptProblemBase', 'ArchOptRepair', 'ArchDesignSpace']
+__all__ = ['ArchOptProblemBase', 'ArchOptRepair', 'ArchDesignSpace', 'UncertainParameter']
 
 
 class ArchOptProblemBase(Problem):
@@ -80,6 +81,9 @@ class ArchOptProblemBase(Problem):
                 self._gen_all_discrete_x,
                 self._get_n_correct_discrete,
                 self._get_n_active_cont_mean_correct,
+                uncertain_params=self._get_uncertain_parameters(),
+                param_is_active_func=self._get_param_is_active,
+                dv_names=self._get_dv_names(),
             )
         self.design_space = design_space
 
@@ -117,6 +121,35 @@ class ArchOptProblemBase(Problem):
     def is_conditionally_active(self):
         """Boolean mask specifying for each design variable whether it is conditionally active or not"""
         return self.design_space.is_conditionally_active
+
+    @property
+    def uncertain_params(self):
+        """The uncertain parameters of this problem: sampled rather than optimized (empty if deterministic)"""
+        return self.design_space.uncertain_params
+
+    @property
+    def n_param(self) -> int:
+        """Number of uncertain parameters"""
+        return self.design_space.n_param
+
+    @property
+    def param_names(self):
+        return self.design_space.param_names
+
+    @property
+    def is_param_conditionally_active(self):
+        """Boolean mask specifying for each uncertain parameter whether it is conditionally active or not"""
+        return self.design_space.is_param_conditionally_active
+
+    def get_param_is_active(self, x: np.ndarray, is_active: np.ndarray) -> np.ndarray:
+        """Returns for each (corrected) design vector which uncertain parameters are active"""
+        return self.design_space.get_param_is_active(x, is_active)
+
+    def sample_parameters(self, x: np.ndarray, is_active: np.ndarray, n: int, random_state=None,
+                          common_random_numbers=True) -> np.ndarray:
+        """Sample the uncertain parameters for a set of (corrected) design vectors; returns n_x x n x n_param"""
+        return self.design_space.sample_parameters(
+            x, is_active, n, random_state=random_state, common_random_numbers=common_random_numbers)
 
     def get_categorical_values(self, x: np.ndarray, i_dv) -> np.ndarray:
         """Gets the associated categorical variable values for some design variable"""
@@ -293,6 +326,15 @@ class ArchOptProblemBase(Problem):
             print(f'corr_ratio   : {corr_ratio:.2f} (discr.: {discrete_corr_ratio:.2f}; '
                   f'cont.: {cont_corr_ratio:.2f}; fraction of imp_ratio: {corr_fraction*100:.1f}%)')
 
+        if self.n_param > 0:
+            print(f'n_param      : {self.n_param}')  # Number of uncertain parameters
+            param_imp_ratio = self.design_space.param_imputation_ratio
+            n_cond_param = int(np.sum(self.is_param_conditionally_active))
+            # Is the uncertainty space hierarchical (i.e. do some parameters only exist for some architectures)?
+            print(f'HIER_param   : {n_cond_param > 0} ({n_cond_param} conditionally active)')
+            if not np.isnan(param_imp_ratio):
+                print(f'param_imp_rat: {param_imp_ratio:.2f}')
+
         fail_rate = self.get_failure_rate()
         if fail_rate is not None and fail_rate > 0:
             might_have_warn = ' (CHECK DECLARATION)' if not self.might_have_hidden_constraints() else ''
@@ -414,6 +456,26 @@ class ArchOptProblemBase(Problem):
     def _gen_all_discrete_x(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """Generate all possible discrete design vectors (if available). Returns design vectors and activeness
         information. Not needed if an explicit design space is provided."""
+
+    def _get_dv_names(self) -> Optional[List[str]]:
+        """Return names for the design variables, enabling uncertain parameters to reference them by name in their
+        `active_if` condition. Not needed if an explicit design space is provided."""
+
+    def _get_uncertain_parameters(self) -> List[UncertainParameter]:
+        """
+        Return the uncertain parameters of this problem: quantities that influence the evaluation but that are not
+        chosen by the optimizer. Return an empty list (the default) for a deterministic problem.
+        Not needed if an explicit design space is provided.
+        """
+        return []
+
+    def _get_param_is_active(self, x: np.ndarray, is_active: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Return which uncertain parameters are active for each (corrected) design vector, as an n x n_param boolean
+        matrix. Implement this if parameter activeness follows from the structure of the problem; return None (the
+        default) to derive it from the `active_if` conditions declared on the uncertain parameters.
+        Not needed if an explicit design space is provided.
+        """
 
     def store_results(self, results_folder):
         """Callback function to store intermediate or final results in some results folder. Should include all

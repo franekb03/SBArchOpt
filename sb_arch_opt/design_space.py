@@ -30,8 +30,10 @@ from cached_property import cached_property
 from pymoo.operators.sampling.lhs import LatinHypercubeSampling
 from pymoo.core.variable import Variable, Real, Integer, Binary, Choice
 from sb_arch_opt.util import get_np_random_singleton
+from sb_arch_opt.uncertainty import UncertainParameter
 
-__all__ = ['ArchDesignSpace', 'ImplicitArchDesignSpace', 'CorrectorInterface', 'CorrectorUnavailableError']
+__all__ = ['ArchDesignSpace', 'ImplicitArchDesignSpace', 'CorrectorInterface', 'CorrectorUnavailableError',
+           'UncertainParameter']
 
 
 class CorrectorInterface:
@@ -192,6 +194,275 @@ class ArchDesignSpace:
     def is_cont_mask(self) -> np.ndarray:
         """Boolean vector specifying whether each variable is a continuous variable"""
         return ~self.is_discrete_mask
+
+    @cached_property
+    def dv_names(self) -> List[str]:
+        """Names of the design variables; used to resolve `UncertainParameter.active_if` references by name"""
+        names = self._get_dv_names()
+        if names is None:
+            return [f'x{i}' for i in range(self.n_var)]
+        if len(names) != self.n_var:
+            raise ValueError(f'Nr of design variable names should match nr of variables: {len(names)} != {self.n_var}')
+        return list(names)
+
+    """###########################
+    ### UNCERTAIN PARAMETERS  ###
+    ###########################
+
+    Uncertain parameters are quantities that influence the evaluation but are not chosen by the optimizer: they are
+    sampled instead. They are deliberately kept out of `des_vars` (and therefore out of the design vectors seen by
+    the algorithms), but otherwise mirror the design variable machinery: they have bounds, they can be
+    conditionally active, and inactive occurrences are imputed to a canonical value.
+    """
+
+    @cached_property
+    def uncertain_params(self) -> List[UncertainParameter]:
+        """The uncertain parameters of this design space (empty if the problem is deterministic)"""
+        params = self._get_uncertain_parameters() or []
+        for param in params:
+            if not isinstance(param, UncertainParameter):
+                raise ValueError(f'Uncertain parameters should be UncertainParameter instances: {param!r}')
+
+        names = [param.name for param in params]
+        if len(set(names)) != len(names):
+            raise ValueError(f'Uncertain parameter names should be unique: {names}')
+        return params
+
+    @cached_property
+    def n_param(self) -> int:
+        """Number of uncertain parameters"""
+        return len(self.uncertain_params)
+
+    @cached_property
+    def param_names(self) -> List[str]:
+        return [param.name for param in self.uncertain_params]
+
+    @cached_property
+    def u_nominal(self) -> np.ndarray:
+        """Nominal (canonical) values of the uncertain parameters; inactive parameters are imputed to these"""
+        return np.array([param.nominal for param in self.uncertain_params], dtype=float)
+
+    @cached_property
+    def param_xl(self) -> np.ndarray:
+        """Lower bounds of the uncertain parameters"""
+        return np.array([param.bounds[0] for param in self.uncertain_params], dtype=float)
+
+    @cached_property
+    def param_xu(self) -> np.ndarray:
+        """Upper bounds of the uncertain parameters"""
+        return np.array([param.bounds[1] for param in self.uncertain_params], dtype=float)
+
+    @cached_property
+    def is_param_conditionally_active(self) -> np.ndarray:
+        """
+        Returns a mask specifying for each uncertain parameter whether it is conditionally active (i.e. may become
+        inactive for some architectures).
+        """
+        is_cond_active = self._is_param_conditionally_active()
+
+        if is_cond_active is None:
+            # Deduce from all discrete design vectors if available
+            x_all, is_act_all = self.all_discrete_x
+            if x_all is not None:
+                return np.any(~self.get_param_is_active(x_all, is_act_all), axis=0)
+
+            # Otherwise deduce from the declared activeness conditions
+            return np.array([param.active_if is not None for param in self.uncertain_params], dtype=bool)
+
+        is_cond_active = np.array(is_cond_active, dtype=bool)
+        if len(is_cond_active) != self.n_param:
+            raise ValueError(f'is_param_conditionally_active should be same length as the nr of uncertain '
+                             f'parameters: {len(is_cond_active)} != {self.n_param}')
+        return is_cond_active
+
+    def get_param_is_active(self, x: np.ndarray, is_active: np.ndarray) -> np.ndarray:
+        """
+        Returns for each design vector which uncertain parameters are active (n x n_param).
+
+        Note that parameter activeness is a function of the *corrected* design vectors and their activeness matrix,
+        not of the activeness matrix alone: hierarchy branches on selected values, and `is_active` only says that a
+        choice was made, not which option was selected. Always call this with design vectors that have been
+        corrected (see `correct_x`).
+        """
+        if self.n_param == 0:
+            return np.zeros((x.shape[0], 0), dtype=bool)
+
+        is_param_active = self._get_param_is_active(x, is_active)
+        if is_param_active is None:
+            is_param_active = self._param_is_active_from_links(x, is_active)
+
+        is_param_active = np.asarray(is_param_active, dtype=bool)
+        if is_param_active.shape != (x.shape[0], self.n_param):
+            raise RuntimeError(f'Inconsistent parameter activeness dimensions: '
+                               f'{is_param_active.shape} != {(x.shape[0], self.n_param)}')
+        return is_param_active
+
+    def _param_is_active_from_links(self, x: np.ndarray, is_active: np.ndarray) -> np.ndarray:
+        """Default parameter activeness, derived from the `active_if` conditions of the uncertain parameters"""
+        is_param_active = np.ones((x.shape[0], self.n_param), dtype=bool)
+
+        for i_param, param in enumerate(self.uncertain_params):
+            condition = param.active_if
+            if condition is None:  # Always active
+                continue
+
+            if callable(condition):
+                is_param_active[:, i_param] = np.asarray(condition(x, is_active), dtype=bool)
+                continue
+
+            if isinstance(condition, tuple):
+                if len(condition) != 2:
+                    raise ValueError(f'A tuple activeness condition should be (design variable, value(s)): '
+                                     f'{condition!r}')
+                dv_ref, values = condition
+            else:
+                dv_ref, values = condition, None
+
+            i_dv = self._get_dv_index(dv_ref)
+
+            # The design variable (or the choice it represents) should be active
+            is_dv_active = is_active[:, i_dv]
+
+            # If specific values are requested, also check the selected value. Note that this check is combined with
+            # the design variable's activeness: inactive design variables are imputed to their lower bound, so
+            # testing the value on its own would yield false positives.
+            if values is not None:
+                if not isinstance(values, (set, frozenset, list, tuple, np.ndarray)):
+                    values = [values]
+                matches_value = np.zeros(x.shape[0], dtype=bool)
+                for value in values:
+                    matches_value |= x[:, i_dv] == value
+                is_dv_active = is_dv_active & matches_value
+
+            is_param_active[:, i_param] = is_dv_active
+
+        return is_param_active
+
+    def _get_dv_index(self, dv_ref: Union[int, str]) -> int:
+        """Resolve a design variable reference (index or name) to a design variable index"""
+        if isinstance(dv_ref, (int, np.integer)):
+            i_dv = int(dv_ref)
+            if not 0 <= i_dv < self.n_var:
+                raise ValueError(f'Design variable index out of range: {i_dv} (n_var = {self.n_var})')
+            return i_dv
+
+        dv_names = self.dv_names
+        if dv_ref not in dv_names:
+            raise ValueError(f'Unknown design variable name: {dv_ref!r} (available: {dv_names})')
+        return dv_names.index(dv_ref)
+
+    def impute_u(self, u: np.ndarray, is_param_active: np.ndarray):
+        """
+        Applies the default imputation to uncertain parameter values: inactive parameters are set to their nominal
+        value. This mirrors `impute_x` for design variables, and matches the idea that an inactive parameter does
+        not exist for that architecture and therefore should not introduce any variation.
+        """
+        u_nominal = self.u_nominal
+        for i_param in range(self.n_param):
+            u[..., i_param][~is_param_active[..., i_param]] = u_nominal[i_param]
+
+    def sample_parameters(self, x: np.ndarray, is_active: np.ndarray, n: int, random_state=None,
+                          common_random_numbers=True) -> np.ndarray:
+        """
+        Sample the uncertain parameters for a set of (corrected) design vectors. Returns an n_x x n x n_param matrix
+        of parameter values, where inactive parameters have been imputed to their nominal values.
+
+        Sampling is done in quantile space (a Latin hypercube in [0, 1]^n_param mapped through each parameter's
+        inverse CDF). By default the *same* quantile block is used for every design vector (common random numbers),
+        which makes the reduced objective a deterministic function of x for a given random state. This matters for
+        surrogate-based optimization: with independently drawn samples per design point, the surrogate fits Monte
+        Carlo noise instead of the underlying robust objective.
+        """
+        n_x = x.shape[0]
+        if self.n_param == 0:
+            return np.zeros((n_x, n, 0))
+
+        n_blocks = 1 if common_random_numbers else n_x
+        q = self._sample_quantiles(n_blocks*n, random_state).reshape((n_blocks, n, self.n_param))
+
+        u_blocks = np.empty(q.shape)
+        for i_param, param in enumerate(self.uncertain_params):
+            u_blocks[:, :, i_param] = param.ppf(q[:, :, i_param])
+
+        u = np.broadcast_to(u_blocks, (n_x, n, self.n_param)).copy() if common_random_numbers else u_blocks
+
+        # Impute inactive parameters; is_param_active is (n_x x n_param), broadcast over the sample axis
+        is_param_active = self.get_param_is_active(x, is_active)
+        self.impute_u(u, np.repeat(is_param_active[:, None, :], n, axis=1))
+        return u
+
+    def _sample_quantiles(self, n: int, random_state=None) -> np.ndarray:
+        """Sample n quantile vectors in [0, 1]^n_param using a Latin hypercube"""
+        from scipy.stats import qmc
+        if random_state is None:
+            random_state = get_np_random_singleton()
+        return qmc.LatinHypercube(d=self.n_param, seed=random_state).random(n)
+
+    def get_param_activeness_rates(self, force=False) -> Optional[pd.DataFrame]:
+        """
+        Returns for each uncertain parameter how often it is active over all valid discrete design vectors, along
+        with whether it is declared conditionally active. Analogous to `get_discrete_rates` for design variables.
+        """
+        if self.n_param == 0:
+            return
+
+        x_all, is_act_all = self.all_discrete_x
+        if x_all is None:
+            if not force:
+                return
+            x_all, is_act_all = self.all_discrete_x_by_trial_and_imputation
+
+        is_param_active = self.get_param_is_active(x_all, is_act_all)
+        return pd.DataFrame(index=self.param_names, data={
+            'active_rate': np.sum(is_param_active, axis=0) / is_param_active.shape[0],
+            'is_cond': self.is_param_conditionally_active,
+            'nominal': self.u_nominal,
+        })
+
+    @cached_property
+    def param_imputation_ratio(self) -> float:
+        """
+        The ratio between the number of declared uncertain parameters and the mean number of active uncertain
+        parameters, as seen over all valid discrete design vectors. A value of 1 means all parameters are always
+        active; a higher value means the uncertainty space is more hierarchical.
+        """
+        if self.n_param == 0:
+            return 1.
+
+        rates = self.get_param_activeness_rates()
+        if rates is None:
+            return np.nan
+
+        n_active_mean = float(np.sum(rates['active_rate']))
+        if n_active_mean == 0.:
+            return np.nan
+        return self.n_param / n_active_mean
+
+    def check_param_conditionality(self, force=False):
+        """
+        Cross-check the declared parameter conditionality against the activeness observed over all valid discrete
+        design vectors: a parameter that is never declared conditional should never become inactive. Raises a
+        RuntimeError if the declaration is inconsistent.
+        """
+        if self.n_param == 0:
+            return
+
+        is_cond_declared = self._is_param_conditionally_active()
+        if is_cond_declared is None:
+            return
+
+        x_all, is_act_all = self.all_discrete_x
+        if x_all is None:
+            if not force:
+                return
+            x_all, is_act_all = self.all_discrete_x_by_trial_and_imputation
+
+        any_inactive = np.any(~self.get_param_is_active(x_all, is_act_all), axis=0)
+        is_inconsistent = any_inactive & ~np.array(is_cond_declared, dtype=bool)
+        if np.any(is_inconsistent):
+            i_param, = np.where(is_inconsistent)
+            names = [self.param_names[i] for i in i_param]
+            raise RuntimeError(f'Inconsistent conditionality for uncertain parameters: {names}')
 
     def correct_x(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Imputes design vectors and returns activeness vectors"""
@@ -692,6 +963,27 @@ class ArchDesignSpace:
         """Returns the list of design variables (pymoo classes)"""
         raise NotImplementedError
 
+    def _get_dv_names(self) -> Optional[List[str]]:
+        """Returns names for the design variables, enabling `active_if` references by name; optional"""
+
+    def _get_uncertain_parameters(self) -> List[UncertainParameter]:
+        """
+        Returns the list of uncertain parameters: quantities that influence the evaluation but that are not chosen
+        by the optimizer. Return an empty list (the default) for a deterministic design space.
+        """
+        return []
+
+    def _is_param_conditionally_active(self) -> Optional[List[bool]]:
+        """Returns for each uncertain parameter whether it is conditionally active (i.e. may become inactive)"""
+
+    def _get_param_is_active(self, x: np.ndarray, is_active: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Returns which uncertain parameters are active for each (corrected) design vector, as an n x n_param boolean
+        matrix. Implement this if parameter activeness follows from the structure of the design space (for example
+        from an underlying graph); return None (the default) to derive activeness from the `active_if` conditions
+        declared on the uncertain parameters themselves.
+        """
+
     def _is_conditionally_active(self) -> Optional[List[bool]]:
         """Returns for each design variable whether it is conditionally active (i.e. may become inactive)"""
         raise NotImplementedError
@@ -768,7 +1060,10 @@ class ImplicitArchDesignSpace(ArchDesignSpace):
                  n_valid_discrete_func: Callable[[], int] = None, n_active_cont_mean: Callable[[], float] = None,
                  gen_all_discrete_x_func: Callable[[], Optional[Tuple[np.ndarray, np.ndarray]]] = None,
                  n_correct_discrete_func: Callable[[], int] = None,
-                 n_active_cont_mean_correct: Callable[[], float] = None):
+                 n_active_cont_mean_correct: Callable[[], float] = None,
+                 uncertain_params: List[UncertainParameter] = None,
+                 param_is_active_func: Callable[[np.ndarray, np.ndarray], Optional[np.ndarray]] = None,
+                 dv_names: List[str] = None):
         self._variables = des_vars
         self._correct_x_func = correct_x_func
         self._is_conditional_func = is_conditional_func
@@ -777,6 +1072,9 @@ class ImplicitArchDesignSpace(ArchDesignSpace):
         self._n_correct_discrete_func = n_correct_discrete_func
         self._n_active_cont_mean_correct = n_active_cont_mean_correct
         self._gen_all_discrete_x_func = gen_all_discrete_x_func
+        self._uncertain_params = uncertain_params
+        self._param_is_active_func = param_is_active_func
+        self._dv_names = dv_names
         super().__init__()
 
     def is_explicit(self) -> bool:
@@ -813,3 +1111,13 @@ class ImplicitArchDesignSpace(ArchDesignSpace):
     def _gen_all_discrete_x(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         if self._gen_all_discrete_x_func is not None:
             return self._gen_all_discrete_x_func()
+
+    def _get_dv_names(self) -> Optional[List[str]]:
+        return self._dv_names
+
+    def _get_uncertain_parameters(self) -> List[UncertainParameter]:
+        return self._uncertain_params or []
+
+    def _get_param_is_active(self, x: np.ndarray, is_active: np.ndarray) -> Optional[np.ndarray]:
+        if self._param_is_active_func is not None:
+            return self._param_is_active_func(x, is_active)
