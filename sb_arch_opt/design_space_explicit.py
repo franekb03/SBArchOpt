@@ -29,7 +29,6 @@ from ConfigSpace import InactiveHyperparameterSetError
 from cached_property import cached_property
 
 from sb_arch_opt.design_space import ArchDesignSpace
-from sb_arch_opt.uncertainty import UncertainParameter
 from sb_arch_opt.util import get_np_random_singleton
 from pymoo.core.variable import Variable, Real, Integer, Choice
 
@@ -104,7 +103,7 @@ class ExplicitArchDesignSpace(ArchDesignSpace):
     Original sorting order is maintained.
     """
 
-    def __init__(self, params: List[ParamType] = None, uncertain_parameters: List[UncertainParameter] = None,):
+    def __init__(self, params: List[ParamType] = None):
         super().__init__()
 
         self._var_names = []
@@ -114,7 +113,6 @@ class ExplicitArchDesignSpace(ArchDesignSpace):
         self._cs = NoDefaultConfigurationSpace(name='Explicit DS')
         if params is not None:
             self.add_params(params)
-        self._uncertain_parameters = uncertain_parameters
 
     @property
     def config_space(self):
@@ -380,9 +378,6 @@ class ExplicitArchDesignSpace(ArchDesignSpace):
             configs.append(config)
 
         return self._configs_to_x(configs)
-
-    def _get_uncertain_parameters(self) -> List[UncertainParameter]:
-        return self._uncertain_parameters or []
 
     def _configs_to_x(self, configs: List[Configuration]) -> Tuple[np.ndarray, np.ndarray]:
         x = np.zeros((len(configs), self.n_var))
