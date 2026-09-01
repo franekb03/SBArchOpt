@@ -29,6 +29,8 @@ from typing import *
 from cached_property import cached_property
 from pymoo.operators.sampling.lhs import LatinHypercubeSampling
 from pymoo.core.variable import Variable, Real, Integer, Binary, Choice
+
+from sb_arch_opt.uncertainty import *
 from sb_arch_opt.util import get_np_random_singleton
 
 __all__ = ['ArchDesignSpace', 'ImplicitArchDesignSpace', 'CorrectorInterface', 'CorrectorUnavailableError']
@@ -106,6 +108,19 @@ class ArchDesignSpace:
 
         self._is_initialized = True
         return corr_des_vars
+
+    @cached_property
+    def uncertain_parameter(self) -> List[UncertainParameter]:
+        params = self._get_uncertain_parameters()
+        for param in params:
+            if not isinstance(param, UncertainParameter):
+                raise ValueError("Parameter must be an instance of UncertainParameter")
+
+        return params
+
+    @cached_property
+    def n_uncertain_parameters(self) -> int:
+        return len(self.uncertain_parameter)
 
     @cached_property
     def is_conditionally_active(self) -> np.ndarray:
@@ -692,6 +707,10 @@ class ArchDesignSpace:
         """Returns the list of design variables (pymoo classes)"""
         raise NotImplementedError
 
+    def _get_uncertain_parameters(self) -> List[UncertainParameter]:
+        """Returns the list of uncertain parameters or an empty array if not defined"""
+        raise NotImplementedError
+
     def _is_conditionally_active(self) -> Optional[List[bool]]:
         """Returns for each design variable whether it is conditionally active (i.e. may become inactive)"""
         raise NotImplementedError
@@ -768,7 +787,8 @@ class ImplicitArchDesignSpace(ArchDesignSpace):
                  n_valid_discrete_func: Callable[[], int] = None, n_active_cont_mean: Callable[[], float] = None,
                  gen_all_discrete_x_func: Callable[[], Optional[Tuple[np.ndarray, np.ndarray]]] = None,
                  n_correct_discrete_func: Callable[[], int] = None,
-                 n_active_cont_mean_correct: Callable[[], float] = None):
+                 n_active_cont_mean_correct: Callable[[], float] = None,
+                 uncertain_parameters: List[UncertainParameter] = None):
         self._variables = des_vars
         self._correct_x_func = correct_x_func
         self._is_conditional_func = is_conditional_func
@@ -777,6 +797,7 @@ class ImplicitArchDesignSpace(ArchDesignSpace):
         self._n_correct_discrete_func = n_correct_discrete_func
         self._n_active_cont_mean_correct = n_active_cont_mean_correct
         self._gen_all_discrete_x_func = gen_all_discrete_x_func
+        self._uncertain_parameters = uncertain_parameters
         super().__init__()
 
     def is_explicit(self) -> bool:
@@ -813,3 +834,6 @@ class ImplicitArchDesignSpace(ArchDesignSpace):
     def _gen_all_discrete_x(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         if self._gen_all_discrete_x_func is not None:
             return self._gen_all_discrete_x_func()
+
+    def _get_uncertain_parameters(self) -> List[UncertainParameter]:
+        return self._uncertain_parameters or []

@@ -31,9 +31,9 @@ from pymoo.core.variable import Variable
 from pymoo.core.population import Population
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from sb_arch_opt.design_space import ArchDesignSpace, ImplicitArchDesignSpace
+from sb_arch_opt.uncertainty import UncertainParameter
 
 __all__ = ['ArchOptProblemBase', 'ArchOptRepair', 'ArchDesignSpace']
-
 
 class ArchOptProblemBase(Problem):
     """
@@ -80,6 +80,7 @@ class ArchOptProblemBase(Problem):
                 self._gen_all_discrete_x,
                 self._get_n_correct_discrete,
                 self._get_n_active_cont_mean_correct,
+                self._get_uncertain_parameters()
             )
         self.design_space = design_space
 
@@ -117,6 +118,14 @@ class ArchOptProblemBase(Problem):
     def is_conditionally_active(self):
         """Boolean mask specifying for each design variable whether it is conditionally active or not"""
         return self.design_space.is_conditionally_active
+
+    @property
+    def uncertain_parameters(self):
+        return self.design_space.uncertain_parameter
+
+    @property
+    def n_uncertain_parameters(self) -> int:
+        return self.design_space.n_uncertain_parameters
 
     def get_categorical_values(self, x: np.ndarray, i_dv) -> np.ndarray:
         """Gets the associated categorical variable values for some design variable"""
@@ -293,6 +302,9 @@ class ArchOptProblemBase(Problem):
             print(f'corr_ratio   : {corr_ratio:.2f} (discr.: {discrete_corr_ratio:.2f}; '
                   f'cont.: {cont_corr_ratio:.2f}; fraction of imp_ratio: {corr_fraction*100:.1f}%)')
 
+        if self.n_uncertain_parameters > 0:
+            print(f'n_uncertain_parameters   : {self.n_uncertain_parameters}')
+
         fail_rate = self.get_failure_rate()
         if fail_rate is not None and fail_rate > 0:
             might_have_warn = ' (CHECK DECLARATION)' if not self.might_have_hidden_constraints() else ''
@@ -414,6 +426,9 @@ class ArchOptProblemBase(Problem):
     def _gen_all_discrete_x(self) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """Generate all possible discrete design vectors (if available). Returns design vectors and activeness
         information. Not needed if an explicit design space is provided."""
+
+    def _get_uncertain_parameters(self) -> List[UncertainParameter]:
+        """Return uncertain parameters defined for this problem. By default, this method returns an empty list."""
 
     def store_results(self, results_folder):
         """Callback function to store intermediate or final results in some results folder. Should include all
