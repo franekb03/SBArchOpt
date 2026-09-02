@@ -220,7 +220,7 @@ def test_statistics_available_per_design_point():
 def test_reported_statistics_reproduce_the_reduced_value():
     """The statistics handed back must be exactly what the optimizer saw, not a differently-estimated version."""
     problem = HierarchicalProblem(obj_type=[StochasticOutputType.MARGIN],
-                                  constr_type=[StochasticOutputType.QUANTILE], margin_k=2., quantile_q=.95)
+                                  ieq_constr_type=[StochasticOutputType.QUANTILE], margin_k=2., quantile_q=.95)
     out = problem.evaluate(np.array([[1, .6, .25]]), return_as_dictionary=True)
 
     result = out['stochastic'][0]
@@ -281,10 +281,10 @@ def test_output_type_lengths_checked():
 def test_constr_type_checked_against_n_ieq_constr():
     """Regression: this used to be validated against n_obj"""
     with pytest.raises(ValueError):
-        HierarchicalProblem(constr_type=[StochasticOutputType.MEAN, StochasticOutputType.MEAN])
+        HierarchicalProblem(ieq_constr_type=[StochasticOutputType.MEAN, StochasticOutputType.MEAN])
 
     # a matching number of constraint types is accepted
-    HierarchicalProblem(constr_type=[StochasticOutputType.MEAN])
+    HierarchicalProblem(ieq_constr_type=[StochasticOutputType.MEAN])
 
 
 def test_unknown_uq_method():

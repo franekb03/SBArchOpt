@@ -58,7 +58,7 @@ class StochasticArchOptProblem(ArchOptProblemBase):
                  obj_type: List[StochasticOutputType] = None, ieq_constr_type: List[StochasticOutputType] = None,
                  eq_constr_type: List[StochasticOutputType] = None,
                  n: int = 100, seed: int = None, margin_k: float = 1.645, quantile_q: float = .95,
-                 nan_policy: str = 'propagate', **kwargs):
+                 nan_policy: str = 'propagate', uq_method_kwargs: dict = None, **kwargs):
 
         if param_space is None or param_space.n_parameters == 0:
             raise ValueError('Define stochastic parameter space for the robust problem.')
@@ -102,7 +102,7 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         # Method-specific settings, e.g. degree and n_metamodel_samples for polynomial chaos
         self.uq_method = uq_method_class(param_space, self.stochastic_output_type, n_obj, n_ieq_constr,
-                                         n_eq_constr, n, seed)
+                                         n_eq_constr, n, seed, **(uq_method_kwargs or {}))
 
         # Latest per-design-point statistics, also provided in the evaluation output
         self.stochastic_results: List[StochasticResult] = []
@@ -139,29 +139,25 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         # Evaluate all design vectors for each realization of the uncertain parameters: the loop is over samples,
         # not over design points, so that the evaluation function stays vectorized over design points
-        for i_sample in range(n_s):
+        for sample_i in range(n_s):
             self._arch_evaluate_sample(
-                x, is_active_out, f_s[:, i_sample, :], g_s[:, i_sample, :], h_s[:, i_sample, :],
-                *args, sample=u_samples[i_sample, :], **kwargs)
+                x, is_active_out, f_s[:, sample_i, :], g_s[:, sample_i, :], h_s[:, sample_i, :],
+                *args, sample=u_samples[sample_i, :], **kwargs)
 
         # Reduce the sampled responses of each design point to the values the optimizer sees
         k, q, nan_policy = self.margin_k, self.quantile_q, self.nan_policy
         self.stochastic_results = []
-        for i_x in range(n_x):
+        for x_i in range(n_x):
             result = self.uq_method.process_results(
-                np.concatenate([f_s[i_x], g_s[i_x], h_s[i_x]], axis=1))
+                np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1))
             self.stochastic_results.append(result)
 
-            for i_f, output in enumerate(result.f):
-                f_out[i_x, i_f] = output.reduce(k=k, q=q, nan_policy=nan_policy)
-            for i_g, output in enumerate(result.g):
-                g_out[i_x, i_g] = output.reduce(k=k, q=q, nan_policy=nan_policy)
-            for i_h, output in enumerate(result.h):
-                h_out[i_x, i_h] = output.reduce(k=k, q=q, nan_policy=nan_policy)
-
-    """##############################
-    ### IMPLEMENT FUNCTIONS BELOW ###
-    ##############################"""
+            for f_i, output in enumerate(result.f):
+                f_out[x_i, f_i] = output.reduce(k=k, q=q, nan_policy=nan_policy)
+            for g_i, output in enumerate(result.g):
+                g_out[x_i, g_i] = output.reduce(k=k, q=q, nan_policy=nan_policy)
+            for h_i, output in enumerate(result.h):
+                h_out[x_i, h_i] = output.reduce(k=k, q=q, nan_policy=nan_policy)
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, *args, sample: np.ndarray, **kwargs):

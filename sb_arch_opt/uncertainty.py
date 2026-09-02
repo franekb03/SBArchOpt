@@ -19,7 +19,9 @@ __all__ = ['StochasticOutputType', 'UQMethodType', 'StochasticParameter', 'Stoch
 class StochasticOutputType(enum.Flag):
     NONE = 0
     MEAN = enum.auto()
+    # The output is assumed to be a Gaussian distribution
     MARGIN = enum.auto()
+    # The output is an arbitrary definition and more precise analysis is needed
     QUANTILE = enum.auto()
 
 
@@ -63,7 +65,7 @@ class StochasticParameterSpace:
 
     @property
     def joint_dist(self) -> ot.JointDistribution:
-        # Note: the marginals are the underlying ot.Distribution objects, not the StochasticParameter wrappers
+        """ Joint distribution of independent variables is chosen """
         return ot.JointDistribution([parameter.distribution for parameter in self.parameters],
                                     ot.IndependentCopula(self.n_parameters))
 
@@ -117,10 +119,6 @@ class StochasticOutput:
         """
         Reduce the sampled values to the single value the optimizer sees.
 
-        Note that SBArchOpt objectives are always minimized and inequality constraints are satisfied when <= 0, so
-        MARGIN is always `mean + k*std`: it penalizes both a bad mean and a large spread, for objectives and
-        constraints alike.
-
         `nan_policy` controls what happens when some samples failed to evaluate (NaN, i.e. hidden constraints):
         - 'propagate': any failed sample makes the whole design point fail (the value becomes NaN). This is the
           conservative default and matches how SBArchOpt treats failed evaluations elsewhere.
@@ -128,8 +126,6 @@ class StochasticOutput:
         """
         values = self.to_numpy()
 
-        # Note: the statistics are computed by OpenTURNS rather than numpy, so that a reduced value is exactly
-        # reproducible from this object's mean()/std()/quantile()/margin() afterwards
         if nan_policy == 'propagate':
             if values.size == 0 or not np.all(np.isfinite(values)):
                 return np.nan
@@ -152,7 +148,7 @@ class StochasticOutput:
         if output_type == StochasticOutputType.QUANTILE:
             if not 0. <= q <= 1.:
                 raise ValueError(f'Quantile should be between 0 and 1: {q}')
-            return self.quantile(q)
+            return float(samples.computeQuantile(q)[0])
 
         raise ValueError(f'Unknown stochastic metric type: {output_type}')
 
@@ -160,9 +156,6 @@ class StochasticOutput:
 class StochasticResult:
     """
     All sampled responses of a single design point: the statistics behind the values the optimizer sees.
-
-    Provided per design point in the evaluation output (`out['stochastic']`), so mean, std, quantiles and the fitted
-    output distribution stay available after the optimization has run.
 
     `method_result` optionally carries whatever the UQ method produced beyond the samples themselves; for polynomial
     chaos that is the list of `ot.FunctionalChaosResult`s, from which for example Sobol indices can be obtained.
@@ -179,24 +172,6 @@ class StochasticResult:
 class UQMethod:
     """
     Base class for an uncertainty propagation method.
-
-    A UQ method has two jobs:
-    - `get_samples`: provide the parameter values at which the expensive model must be evaluated (the design)
-    - `process_results`: turn the responses collected at that design, for ONE design point, into `StochasticOutput`s
-
-    The loop over samples is driven by the problem, so the problem's evaluation function stays vectorized over
-    design points. Note that this sample-in / responses-out interface is what OpenTURNS' own UQ algorithms consume:
-    `FunctionalChaosAlgorithm` (PCE), `KrigingAlgorithm` and the sample-based `SobolIndicesAlgorithm` constructors
-    all take an (inputSample, outputSample) pair rather than a callable.
-
-    The design of n samples is drawn once and reused for every design point and every evaluation (common random
-    numbers), so that the reduced objective is a deterministic function of x. This matters for surrogate-based
-    optimization: with freshly drawn samples per evaluation, the surrogate fits noise instead of the robust
-    objective. Call `resample()` to explicitly draw a new design.
-
-    Subclass and implement `process_results` to add a method, overriding `_draw_samples` if it needs a design other
-    than a plain draw from the joint distribution; use `_split_outputs` to map the per-response outputs onto
-    objectives, inequality constraints and equality constraints.
     """
 
     def __init__(self, parameters_space: StochasticParameterSpace, output_type: List[StochasticOutputType],
@@ -249,16 +224,10 @@ class UQMethod:
         if results.shape[0] != self.n_samples:
             raise ValueError(f'Expected {self.n_samples} response rows, got {results.shape[0]}')
 
-    def _split_outputs(self, outputs: List[StochasticOutput], method_result=None) -> StochasticResult:
-        i_g0 = self.n_obj
-        i_h0 = self.n_obj + self.n_ieq_constr
-        return StochasticResult(outputs[:i_g0], outputs[i_g0:i_h0], outputs[i_h0:], method_result=method_result)
-
 
 class MonteCarlo(UQMethod):
     """
-    Monte Carlo uncertainty propagation: the responses are evaluated for n samples of the uncertain parameters, and
-    the statistics are taken directly over those samples.
+    Monte Carlo uncertainty propagation
     """
 
     def process_results(self, results: np.ndarray) -> StochasticResult:
@@ -266,7 +235,10 @@ class MonteCarlo(UQMethod):
         sample = ot.Sample(np.asarray(results, dtype=float))
         outputs = [StochasticOutput.from_results(sample, i, self.output_type[i])
                    for i in range(len(self.output_type))]
-        return self._split_outputs(outputs)
+        f = outputs[:self.n_obj]
+        g = outputs[self.n_obj:self.n_obj + self.n_ieq_constr]
+        h = outputs[self.n_obj + self.n_ieq_constr: self.n_obj + self.n_ieq_constr + self.n_eq_constr]
+        return StochasticResult(f, g, h)
 
 
 class PolynomialChaos(UQMethod):
@@ -358,4 +330,7 @@ class PolynomialChaos(UQMethod):
 
             outputs.append(StochasticOutput(samples, self.output_type[i_out]))
 
-        return self._split_outputs(outputs, method_result=chaos_results)
+        f = outputs[:self.n_obj]
+        g = outputs[self.n_obj:self.n_obj + self.n_ieq_constr]
+        h = outputs[self.n_obj + self.n_ieq_constr: self.n_obj + self.n_ieq_constr + self.n_eq_constr]
+        return StochasticResult(f, g, h, chaos_results)
