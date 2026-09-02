@@ -1,56 +1,80 @@
-import doctest
+"""
+MIT License
+
+Copyright: (c) 2023, Deutsches Zentrum fuer Luft- und Raumfahrt e.V.
+Contact: jasper.bussemaker@dlr.de
+
+Stochastic version of the Rosenbrock problem: a robust optimization test problem.
+"""
+from typing import List
 
 import numpy as np
-from sb_arch_opt.problems.continuous import Rosenbrock
+import openturns as ot
 from pymoo.core.variable import Real
-from sb_arch_opt.algo.pymoo_interface import plot
-from pymoo.optimize import minimize
-from sb_arch_opt.algo.arch_sbo.api import get_arch_sbo_gp
-from sb_arch_opt.problems.problems_base import *
-from pymoo.core.problem import Problem
-import pymoo.gradient.toolbox as anp
-from scipy.stats import multivariate_normal
+
+from sb_arch_opt.robust import StochasticArchOptProblem
+from sb_arch_opt.uncertainty import *
 
 __all__ = ['StochasticRosenbrock']
 
-class StochasticRosenbrockProblem(Problem):
-    def __init__(self, n_var=2, n_param=2, mean=1, std=0.05, seed=None):
-        super().__init__(
-            n_var=n_var, n_obj=1, n_ieq_constr=0, xl=-2.048, xu=2.048, vtype=float
-        )
-        assert n_param == n_var
+
+class StochasticRosenbrock(StochasticArchOptProblem):
+    """
+    The Rosenbrock function where the location of the valley is uncertain:
+
+        f(x, u) = sum_i [ 100*(x_{i+1} - x_i^2)^2 + (u_i - x_i)^2 ]
+
+    with one uncertain parameter u_i ~ N(mean, std) per term.
+
+    With the default MEAN reduction the expected objective is minimized; since E[(u-x)^2] = (E[u]-x)^2 + Var[u],
+    the optimum stays at x_i = mean and the optimal value is the sum of the parameter variances rather than 0.
+
+    Note that only `_arch_evaluate_sample` is implemented, and that it is vectorized over all design points: the
+    loop over uncertain-parameter samples is owned by `StochasticArchOptProblem`.
+    """
+
+    def __init__(self, n_var=2, mean=1., std=.05, n=100, seed=42,
+                 reduction=StochasticOutputType.MEAN, margin_k=1.645, quantile_q=.95):
+        if n_var < 2:
+            raise ValueError('Need at least 2 design variables')
         self.mean = mean
         self.std = std
-        self.seed = seed
+        self._n_param = n_var - 1
 
-    def _evaluate(self, x, out, *args, **kwargs):
-        terms = []
-        param_realization = self.sample_param()
-        for i in range(x.shape[1] - 1):
-            val = 100 * (x[:, i + 1] - x[:, i] ** 2) ** 2 + (param_realization[i] - x[:, i]) ** 2
-            terms.append(val)
-        out["F"] = anp.sum(anp.column_stack(terms), axis=1)
+        param_space = StochasticParameterSpace()
+        for i in range(self._n_param):
+            param_space.add_parameter(StochasticParameter(f'u{i}', ot.Normal(mean, std)))
 
-    def sample_param(self):
-        return multivariate_normal.rvs(self.mean, self.std, random_state=self.seed)
+        super().__init__(
+            [Real(bounds=(-2.048, 2.048)) for _ in range(n_var)],
+            param_space=param_space, uq_method_type=UQMethodType.MONTE_CARLO,
+            n_obj=1, obj_type=[reduction], n=n, seed=seed, margin_k=margin_k, quantile_q=quantile_q,
+        )
 
-    def _calc_pareto_front(self):
-        return 0.0
+    def _is_conditionally_active(self) -> List[bool]:
+        return [False]*self.n_var
 
-    def _calc_pareto_set(self):
-        return np.full(self.n_var, 1.0)
+    def _correct_x(self, x: np.ndarray, is_active: np.ndarray):
+        pass
 
-class StochasticRosenbrock(NoHierarchyWrappedProblem):
-    def __init__(self):
-        super().__init__(StochasticRosenbrockProblem(n_var=2))
+    def _get_n_valid_discrete(self) -> int:
+        return 1
 
+    def might_have_hidden_constraints(self):
+        return False
 
-if __name__ == "__main__":
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, *args, sample, **kwargs):
+        f = np.zeros((x.shape[0],))
+        for i in range(self._n_param):
+            f += 100*(x[:, i+1] - x[:, i]**2)**2 + (sample[i] - x[:, i])**2
+        f_out[:, 0] = f
 
-    problem = StochasticRosenbrock()
-    n_init = problem.n_var*10
-    sbo = get_arch_sbo_gp(problem, n_parallel=4, init_size=n_init)
-    n_infill = 100
-    result_sbo = minimize(problem, sbo, termination=('n_eval', n_init + n_infill), seed=42, save_history=True)
+    def _calc_pareto_front(self, *args, **kwargs):
+        # E[(u-x)^2] is minimized at x = E[u], leaving the parameter variance
+        return np.array([[self._n_param * self.std**2]])
 
-    print(f"Iteration number: {len(result_sbo.history)}, minimum objective value: {result_sbo.opt.get("F")}")
+    def _calc_pareto_set(self, *args, **kwargs):
+        return np.full((1, self.n_var), self.mean)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(n_var={self.n_var}, std={self.std}, n={self.uq_method.n})'
