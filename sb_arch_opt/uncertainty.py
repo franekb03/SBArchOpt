@@ -161,9 +161,6 @@ class StochasticOutput:
 
         return self.measure.reduce(samples)
 
-    def __repr__(self):
-        return f'{self.__class__.__name__}({self.measure!r}, n={len(self.output_samples)})'
-
 
 class StochasticResult:
     """

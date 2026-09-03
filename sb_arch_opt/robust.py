@@ -35,9 +35,9 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             raise ValueError('Define stochastic parameter space for the robust problem.')
         self.param_space = param_space
 
-        self.obj_measure = self._check_measures(obj_measure, n_obj, 'obj_measure')
-        self.ieq_constr_measure = self._check_measures(ieq_constr_measure, n_ieq_constr, 'ieq_constr_measure')
-        self.eq_constr_measure = self._check_measures(eq_constr_measure, n_eq_constr, 'eq_constr_measure')
+        self.obj_measure = self.check_measures(obj_measure, n_obj, 'obj_measure')
+        self.ieq_constr_measure = self.check_measures(ieq_constr_measure, n_ieq_constr, 'ieq_constr_measure')
+        self.eq_constr_measure = self.check_measures(eq_constr_measure, n_eq_constr, 'eq_constr_measure')
         self.measures = self.obj_measure + self.ieq_constr_measure + self.eq_constr_measure
 
         self.nan_policy = nan_policy
@@ -57,7 +57,7 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         super().__init__(des_vars, n_obj=n_obj, n_ieq_constr=n_ieq_constr, n_eq_constr=n_eq_constr, **kwargs)
 
     @staticmethod
-    def _check_measures(measures: Optional[List[RobustMeasure]], n: int, name: str) -> List[RobustMeasure]:
+    def check_measures(measures: Optional[List[RobustMeasure]], n: int, name: str) -> List[RobustMeasure]:
         """Default unspecified responses to the expected value, and check the count"""
         if measures is None:
             return [Mean() for _ in range(n)]
