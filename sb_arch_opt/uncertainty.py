@@ -6,43 +6,75 @@ Contact: jasper.bussemaker@dlr.de
 
 Uncertainty quantification building blocks for stochastic (robust) architecture optimization problems.
 """
-import enum
 from typing import List, Optional
 
 import openturns as ot
 import numpy as np
 
-__all__ = ['StochasticOutputType', 'UQMethodType', 'StochasticParameter', 'StochasticParameterSpace',
+__all__ = ['RobustMeasure', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
            'StochasticOutput', 'StochasticResult', 'UQMethod', 'MonteCarlo', 'PolynomialChaos']
 
 
-class StochasticOutputType(enum.Flag):
-    NONE = 0
-    MEAN = enum.auto()
-    # The output is assumed to be a Gaussian distribution
-    MARGIN = enum.auto()
-    # The output is an arbitrary definition and more precise analysis is needed
-    QUANTILE = enum.auto()
+class RobustMeasure:
+    """
+    How the sampled values of one response are reduced to the single value the optimizer sees.
+
+    A measure carries its own parameters and knows how to apply them, so adding one is a matter of subclassing
+    and implementing `reduce` - nothing elsewhere needs to know it exists:
+
+        class WorstCase(RobustMeasure):
+            def reduce(self, samples):
+                return float(samples.getMax()[0])
+
+    Note that SBArchOpt objectives are always minimized and inequality constraints are satisfied when <= 0, so a
+    measure applies identically to objectives and constraints: `Margin` penalizes both a bad mean and a large
+    spread in either role.
+
+    Parameters should be validated in `__init__` rather than in `reduce`, so that a bad configuration fails when
+    the problem is built rather than on the first evaluation.
+    """
+
+    def reduce(self, samples: ot.Sample) -> float:
+        """Reduce an (n_samples x 1) sample of one response to a single value"""
+        raise NotImplementedError
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}()'
 
 
-class UQMethodType(enum.Flag):
-    NONE = 0
-    MONTE_CARLO = enum.auto()
-    PCE = enum.auto()
+class Mean(RobustMeasure):
+    """The expected value of the response"""
 
-class Mean:
-    def __init__(self):
-        self.type = StochasticOutputType.MEAN
+    def reduce(self, samples: ot.Sample) -> float:
+        return float(samples.computeMean()[0])
 
-class Margin:
-    def __init__(self, k: float = 1.645) :
-        self.type = StochasticOutputType.MARGIN
+
+class Margin(RobustMeasure):
+    """`mean + k*sigma`: assumes the response is roughly Gaussian, and penalizes both mean and spread"""
+
+    def __init__(self, k: float = 1.645):
         self.k = k
 
-class Quantile:
-    def __init__(self, q: float = 0.95) :
-        self.type = StochasticOutputType.QUANTILE
+    def reduce(self, samples: ot.Sample) -> float:
+        return float(samples.computeMean()[0] + self.k*samples.computeStandardDeviation()[0])
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(k={self.k})'
+
+
+class Quantile(RobustMeasure):
+    """The q'th quantile of the response; makes no assumption about the shape of the output distribution"""
+
+    def __init__(self, q: float = 0.95):
+        if not 0. <= q <= 1.:
+            raise ValueError(f'Quantile should be between 0 and 1: {q}')
         self.q = q
+
+    def reduce(self, samples: ot.Sample) -> float:
+        return float(samples.computeQuantile(self.q)[0])
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(q={self.q})'
 
 
 class StochasticParameter:
@@ -93,14 +125,14 @@ class StochasticParameterSpace:
 class StochasticOutput:
     """The sampled values of one response (objective or constraint) for one design point."""
 
-    def __init__(self, output_samples: ot.Sample, output_type: StochasticOutputType):
+    def __init__(self, output_samples: ot.Sample, measure: RobustMeasure):
         self.output_samples = output_samples          # ot.Sample of shape (n, 1)
-        self.output_type = output_type
+        self.measure = measure
 
     @classmethod
-    def from_results(cls, results: ot.Sample, index: int, output_type: StochasticOutputType) -> 'StochasticOutput':
+    def from_results(cls, results: ot.Sample, index: int, measure: RobustMeasure) -> 'StochasticOutput':
         """Extract one response's column from the full (n_samples, n_outputs) results of a single design point."""
-        return cls(output_samples=results.getMarginal(index), output_type=output_type)
+        return cls(output_samples=results.getMarginal(index), measure=measure)
 
     def mean(self) -> float:
         return self.output_samples.computeMean()[0]
@@ -129,9 +161,11 @@ class StochasticOutput:
     def to_numpy(self) -> np.ndarray:
         return np.array(self.output_samples).flatten()
 
-    def reduce(self, param: float = None, nan_policy: str = 'propagate') -> float:
+    def reduce(self, nan_policy: str = 'propagate') -> float:
         """
-        Reduce the sampled values to the single value the optimizer sees.
+        Reduce the sampled values to the single value the optimizer sees, by applying this output's measure.
+
+        This method owns only the handling of failed evaluations; the statistic itself belongs to the measure.
 
         `nan_policy` controls what happens when some samples failed to evaluate (NaN, i.e. hidden constraints):
         - 'propagate': any failed sample makes the whole design point fail (the value becomes NaN). This is the
@@ -152,19 +186,10 @@ class StochasticOutput:
         else:
             raise ValueError(f'Unknown nan_policy: {nan_policy!r} (expected "propagate" or "omit")')
 
-        output_type = self.output_type
-        if output_type in (None, StochasticOutputType.NONE, StochasticOutputType.MEAN):
-            return float(samples.computeMean()[0])
+        return self.measure.reduce(samples)
 
-        if output_type == StochasticOutputType.MARGIN:
-            return float(samples.computeMean()[0]) + param * float(samples.computeStandardDeviation()[0])
-
-        if output_type == StochasticOutputType.QUANTILE:
-            if not 0. <= param <= 1.:
-                raise ValueError(f'Quantile should be between 0 and 1: {param}')
-            return float(samples.computeQuantile(param)[0])
-
-        raise ValueError(f'Unknown stochastic metric type: {output_type}')
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self.measure!r}, n={len(self.output_samples)})'
 
 
 class StochasticResult:
@@ -186,23 +211,65 @@ class StochasticResult:
 class UQMethod:
     """
     Base class for an uncertainty propagation method.
+
+    Construct one with only the settings the caller actually knows, and hand it to the problem:
+
+        uq_method=MonteCarlo(n=100, seed=42)
+        uq_method=PolynomialChaos(n=200, seed=42, degree=8)
+
+    The parameter space, the measures and the response counts are problem structure, so they are supplied
+    afterwards by `StochasticArchOptProblem.__init__` through `bind`.
+
+    A method has two jobs: provide the design at which the expensive model is evaluated (`get_samples`), and turn
+    the responses collected at that design, for ONE design point, into `StochasticOutput`s (`process_results`).
+    Note that this sample-in / responses-out interface is what OpenTURNS' own algorithms consume:
+    `FunctionalChaosAlgorithm` (PCE), `KrigingAlgorithm` and the sample-based `SobolIndicesAlgorithm` constructors
+    all take an (inputSample, outputSample) pair rather than a callable.
+
+    The design of n samples is drawn once and reused for every design point and every evaluation (common random
+    numbers), so that the reduced objective is a deterministic function of x. This matters for surrogate-based
+    optimization: with freshly drawn samples per evaluation, the surrogate fits noise instead of the robust
+    objective. Call `resample()` to explicitly draw a new design.
     """
 
-    def __init__(self, parameters_space: StochasticParameterSpace, output_type: List[StochasticOutputType],
-                 n_obj: int, n_ieq_constr: int, n_eq_constr: int, n: int, seed: int = None):
+    def __init__(self, n: int, seed: int = None):
+        if n is None:
+            raise ValueError('n must be specified: it is the number of expensive evaluations per design point')
+        self.n = n
+        self.seed = seed
+
+        # Set by bind()
+        self.parameters_space: Optional[StochasticParameterSpace] = None
+        self.measures: Optional[List[RobustMeasure]] = None
+        self.n_obj: Optional[int] = None
+        self.n_ieq_constr: Optional[int] = None
+        self.n_eq_constr: Optional[int] = None
+
+        self._samples: Optional[np.ndarray] = None
+
+    def bind(self, parameters_space: StochasticParameterSpace, measures: List[RobustMeasure],
+             n_obj: int, n_ieq_constr: int, n_eq_constr: int):
+        """Attach the problem structure; called by the problem, not by the user"""
         self.parameters_space = parameters_space
-        self.output_type = output_type
+        self.measures = list(measures)
         self.n_obj = n_obj
         self.n_ieq_constr = n_ieq_constr
         self.n_eq_constr = n_eq_constr
-        self.n = n
-        self.seed = seed
-        self._samples: Optional[np.ndarray] = None
 
         n_expected = n_obj + n_ieq_constr + n_eq_constr
-        if len(output_type) != n_expected:
-            raise ValueError(f'Expected {n_expected} output types (n_obj + n_ieq_constr + n_eq_constr), '
-                             f'got {len(output_type)}')
+        if len(self.measures) != n_expected:
+            raise ValueError(f'Expected {n_expected} measures (n_obj + n_ieq_constr + n_eq_constr), '
+                             f'got {len(self.measures)}')
+
+        self._validate()
+
+    def _validate(self):
+        """Method-specific checks that need the bound problem structure; override where needed"""
+
+    def _assert_bound(self):
+        if self.parameters_space is None:
+            raise RuntimeError(f'{self.__class__.__name__} has not been bound to a problem yet; pass it to a '
+                               f'StochasticArchOptProblem rather than using it directly')
 
     @property
     def n_samples(self) -> int:
@@ -211,6 +278,7 @@ class UQMethod:
 
     def get_samples(self) -> np.ndarray:
         """The parameter samples to evaluate, as an n_samples x n_parameters matrix"""
+        self._assert_bound()
         if self._samples is None:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
@@ -233,10 +301,21 @@ class UQMethod:
         raise NotImplementedError
 
     def _check_results(self, results: np.ndarray):
-        if results.shape[1] != len(self.output_type):
-            raise ValueError(f'Expected {len(self.output_type)} response columns, got {results.shape[1]}')
+        self._assert_bound()
+        if results.shape[1] != len(self.measures):
+            raise ValueError(f'Expected {len(self.measures)} response columns, got {results.shape[1]}')
         if results.shape[0] != self.n_samples:
             raise ValueError(f'Expected {self.n_samples} response rows, got {results.shape[0]}')
+
+    def _split_outputs(self, outputs: List[StochasticOutput], method_result=None) -> StochasticResult:
+        """Map the per-response outputs onto objectives, inequality constraints and equality constraints"""
+        i_g0 = self.n_obj
+        i_h0 = self.n_obj + self.n_ieq_constr
+        return StochasticResult(outputs[:i_g0], outputs[i_g0:i_h0],
+                                outputs[i_h0:i_h0 + self.n_eq_constr], method_result)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(n={self.n}, seed={self.seed})'
 
 
 class MonteCarlo(UQMethod):
@@ -247,12 +326,9 @@ class MonteCarlo(UQMethod):
     def process_results(self, results: np.ndarray) -> StochasticResult:
         self._check_results(results)
         sample = ot.Sample(np.asarray(results, dtype=float))
-        outputs = [StochasticOutput.from_results(sample, i, self.output_type[i])
-                   for i in range(len(self.output_type))]
-        f = outputs[:self.n_obj]
-        g = outputs[self.n_obj:self.n_obj + self.n_ieq_constr]
-        h = outputs[self.n_obj + self.n_ieq_constr: self.n_obj + self.n_ieq_constr + self.n_eq_constr]
-        return StochasticResult(f, g, h)
+        outputs = [StochasticOutput.from_results(sample, i, self.measures[i])
+                   for i in range(len(self.measures))]
+        return self._split_outputs(outputs)
 
 
 class PolynomialChaos(UQMethod):
@@ -272,18 +348,19 @@ class PolynomialChaos(UQMethod):
     samples, so the problem's `nan_policy` decides what happens to that design point as usual.
     """
 
-    def __init__(self, parameters_space: StochasticParameterSpace, output_type: List[StochasticOutputType],
-                 n_obj: int, n_ieq_constr: int, n_eq_constr: int, n: int, seed: int = None,
-                 degree: int = 3, n_metamodel_samples: int = 10000):
+    def __init__(self, n: int, seed: int = None, degree: int = 3, n_metamodel_samples: int = 10000):
         self.degree = degree
         self.n_metamodel_samples = n_metamodel_samples
         self._metamodel_input: Optional[ot.Sample] = None
-        super().__init__(parameters_space, output_type, n_obj, n_ieq_constr, n_eq_constr, n, seed)
+        super().__init__(n, seed)
 
+    def _validate(self):
+        # Needs the bound parameter space, since the number of terms depends on the number of parameters
         n_terms = self.n_terms
-        if n < n_terms:
-            raise ValueError(f'A degree-{degree} expansion in {parameters_space.n_parameters} parameters has '
-                             f'{n_terms} terms, so it needs at least that many samples to fit: n = {n}')
+        if self.n < n_terms:
+            raise ValueError(f'A degree-{self.degree} expansion in {self.parameters_space.n_parameters} '
+                             f'parameters has {n_terms} terms, so it needs at least that many samples to fit: '
+                             f'n = {self.n}')
 
     @property
     def n_terms(self) -> int:
@@ -342,9 +419,6 @@ class PolynomialChaos(UQMethod):
                 chaos_results.append(chaos_result)
                 samples = chaos_result.getMetaModel()(metamodel_input)
 
-            outputs.append(StochasticOutput(samples, self.output_type[i_out]))
+            outputs.append(StochasticOutput(samples, self.measures[i_out]))
 
-        f = outputs[:self.n_obj]
-        g = outputs[self.n_obj:self.n_obj + self.n_ieq_constr]
-        h = outputs[self.n_obj + self.n_ieq_constr: self.n_obj + self.n_ieq_constr + self.n_eq_constr]
-        return StochasticResult(f, g, h, chaos_results)
+        return self._split_outputs(outputs, method_result=chaos_results)
