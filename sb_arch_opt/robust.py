@@ -22,37 +22,7 @@ __all__ = ['StochasticArchOptProblem']
 class StochasticArchOptProblem(ArchOptProblemBase):
     """
     Base class for a stochastic (robust) architecture optimization problem.
-
-    Implement `_arch_evaluate_sample` and nothing else: it is called once per uncertain-parameter sample, with the
-    full design vector matrix and one realization of the parameters, and fills the response matrices exactly like
-    `_arch_evaluate` would. This class owns the loop over samples, the correction of design vectors, and the
-    reduction of the sampled responses to the values the optimizer sees.
-
-    The evaluation function stays vectorized over design points: it receives all n design vectors at once, so a
-    cheap analytical problem can evaluate them in one numpy call, while an expensive problem is free to loop over
-    (or parallelize across) the rows itself, exactly as a deterministic `_arch_evaluate` would.
-
-    How each response is reduced is given per objective and per constraint as a `RobustMeasure`, which carries
-    its own parameters: `Mean()`, `Margin(k=2.)`, `Quantile(q=.95)`. Any `RobustMeasure` subclass works, so a new
-    measure needs no change here. Responses default to `Mean()`.
-
-    The uncertainty propagation method is passed as an instance carrying its own settings, e.g.
-    `MonteCarlo(n=100, seed=42)` or `PolynomialChaos(n=200, seed=42, degree=8)`.
-
-        super().__init__(des_vars, param_space=param_space, uq_method=MonteCarlo(n=200, seed=42),
-                         n_obj=1, n_ieq_constr=1,
-                         obj_measure=[Margin(k=2.)], ieq_constr_measure=[Quantile(q=.95)])
-
-    The statistics behind the reduced values stay available: a `StochasticResult` per design point is provided in
-    the evaluation output under `out['stochastic']`, carrying the `StochasticOutput`s (and therefore mean, std,
-    quantiles, and the fitted output distribution) of every response, plus whatever the UQ method produced beyond
-    the samples (for polynomial chaos, the fitted `ot.FunctionalChaosResult` of each response).
     """
-
-    #: Configuration arguments that were replaced by `uq_method` and the `*_measure` lists. Rejected explicitly
-    #: because **kwargs is forwarded to pymoo, which silently ignores names it does not know.
-    _RETIRED_KWARGS = ('obj_type', 'constr_type', 'ieq_constr_type', 'eq_constr_type',
-                       'uq_method_type', 'uq_method_kwargs', 'n', 'seed')
 
     def __init__(self, des_vars: Union[List[Variable], ArchDesignSpace], param_space: StochasticParameterSpace,
                  uq_method: UQMethod, n_obj=1, n_ieq_constr=0, n_eq_constr=0,
@@ -60,13 +30,6 @@ class StochasticArchOptProblem(ArchOptProblemBase):
                  ieq_constr_measure: List[RobustMeasure] = None,
                  eq_constr_measure: List[RobustMeasure] = None,
                  nan_policy: str = 'propagate', **kwargs):
-
-        for retired in self._RETIRED_KWARGS:
-            if retired in kwargs:
-                raise TypeError(
-                    f'{retired!r} is no longer accepted: pass a UQMethod instance as uq_method (e.g. '
-                    f'MonteCarlo(n=100, seed=42)) and RobustMeasure lists as obj_measure / ieq_constr_measure / '
-                    f'eq_constr_measure')
 
         if param_space is None or param_space.n_parameters == 0:
             raise ValueError('Define stochastic parameter space for the robust problem.')
@@ -84,7 +47,6 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         if not isinstance(uq_method, UQMethod):
             raise ValueError(f'uq_method should be a UQMethod instance, got: {uq_method!r}')
 
-        # Attach the problem structure the method could not know at construction time
         uq_method.bind(param_space, self.measures, n_obj, n_ieq_constr, n_eq_constr)
         self.uq_method = uq_method
 
