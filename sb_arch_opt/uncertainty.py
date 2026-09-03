@@ -177,6 +177,11 @@ class StochasticResult:
         self.h = h
         self.method_result = method_result
 
+    @property
+    def get_list(self) -> List[StochasticOutput]:
+        return self.f + self.g + self.h
+
+
 
 class UQMethod:
     """
