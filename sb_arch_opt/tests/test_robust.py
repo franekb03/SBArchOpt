@@ -11,11 +11,11 @@ from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenb
 class VectorizedProblem(StochasticArchOptProblem):
     """Only implements _arch_evaluate_sample, vectorized over all design points"""
 
-    def __init__(self, n=100, seed=42, reduction=StochasticOutputType.MEAN, **kwargs):
+    def __init__(self, n=100, seed=42, reduction=None, **kwargs):
         param_space = StochasticParameterSpace()
         param_space.add_parameter(StochasticParameter('u0', ot.Normal(1., .05)))
         super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))], param_space=param_space,
-                         uq_method_type=UQMethodType.MONTE_CARLO, n_obj=1, obj_type=[reduction],
+                         uq_method_type=UQMethodType.MONTE_CARLO, n_obj=1, obj_type=reduction,
                          n=n, seed=seed, **kwargs)
 
     def _is_conditionally_active(self):
@@ -89,17 +89,17 @@ def test_reduce_mean():
 
 def test_reduce_margin_matches_margin_method():
     out = _output([1., 2., 3., 4.], StochasticOutputType.MARGIN)
-    assert out.reduce(k=2.) == pytest.approx(out.margin(2.))
+    assert out.reduce(param=2.) == pytest.approx(out.margin(2.))
 
 
 def test_reduce_quantile_matches_quantile_method():
     out = _output(np.linspace(0., 10., 101), StochasticOutputType.QUANTILE)
-    assert out.reduce(q=.9) == pytest.approx(out.quantile(.9))
+    assert out.reduce(param=.9) == pytest.approx(out.quantile(.9))
 
 
 def test_reduce_rejects_bad_quantile():
     with pytest.raises(ValueError):
-        _output([1., 2.], StochasticOutputType.QUANTILE).reduce(q=2.)
+        _output([1., 2.], StochasticOutputType.QUANTILE).reduce(param=2.)
 
 
 def test_reduce_rejects_unknown_nan_policy():
@@ -193,8 +193,8 @@ def test_correction_runs_for_implicit_design_space():
 
 
 def test_hierarchical_problem_with_constraint():
-    problem = HierarchicalProblem(obj_type=[StochasticOutputType.MARGIN],
-                                  constr_type=[StochasticOutputType.QUANTILE], margin_k=2., quantile_q=.95)
+    problem = HierarchicalProblem(obj_type=[(StochasticOutputType.MARGIN, 2)],
+                                  constr_type=[(StochasticOutputType.QUANTILE, 0.95)])
     out = problem.evaluate(np.array([[0, .6, .25], [1, .6, .25]]), return_as_dictionary=True)
 
     assert out['F'].shape == (2, 1)
@@ -219,8 +219,8 @@ def test_statistics_available_per_design_point():
 
 def test_reported_statistics_reproduce_the_reduced_value():
     """The statistics handed back must be exactly what the optimizer saw, not a differently-estimated version."""
-    problem = HierarchicalProblem(obj_type=[StochasticOutputType.MARGIN],
-                                  ieq_constr_type=[StochasticOutputType.QUANTILE], margin_k=2., quantile_q=.95)
+    problem = HierarchicalProblem(obj_type=[(StochasticOutputType.MARGIN, 2)],
+                                  ieq_constr_type=[(StochasticOutputType.QUANTILE, 0.95)])
     out = problem.evaluate(np.array([[1, .6, .25]]), return_as_dictionary=True)
 
     result = out['stochastic'][0]
@@ -275,16 +275,16 @@ def test_output_type_lengths_checked():
     with pytest.raises(ValueError):
         StochasticArchOptProblem([Real(bounds=(0., 1.))], param_space=_param_space(),
                                  uq_method_type=UQMethodType.MONTE_CARLO, n_obj=1,
-                                 obj_type=[StochasticOutputType.MEAN, StochasticOutputType.MEAN])
+                                 obj_type=[(StochasticOutputType.MEAN, None), (StochasticOutputType.MEAN, None)])
 
 
 def test_constr_type_checked_against_n_ieq_constr():
     """Regression: this used to be validated against n_obj"""
     with pytest.raises(ValueError):
-        HierarchicalProblem(ieq_constr_type=[StochasticOutputType.MEAN, StochasticOutputType.MEAN])
+        HierarchicalProblem(ieq_constr_type=[(StochasticOutputType.MEAN, None), (StochasticOutputType.MEAN, None)])
 
     # a matching number of constraint types is accepted
-    HierarchicalProblem(ieq_constr_type=[StochasticOutputType.MEAN])
+    HierarchicalProblem(ieq_constr_type=[(StochasticOutputType.MEAN, None)])
 
 
 def test_unknown_uq_method():
@@ -307,7 +307,7 @@ class QuadraticProblem(StochasticArchOptProblem):
         param_space.add_parameter(StochasticParameter('u', ot.Normal(1., .05)))
         self.fail = fail
         super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))], param_space=param_space,
-                         uq_method_type=uq_method_type, n_obj=1, obj_type=[StochasticOutputType.MEAN],
+                         uq_method_type=uq_method_type, n_obj=1, obj_type=[(StochasticOutputType.MEAN, None)],
                          n=n, seed=42, **kwargs)
 
     def _is_conditionally_active(self):

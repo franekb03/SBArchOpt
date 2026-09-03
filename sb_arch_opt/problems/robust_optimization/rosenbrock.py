@@ -34,7 +34,7 @@ class StochasticRosenbrock(StochasticArchOptProblem):
     """
 
     def __init__(self, n_var=2, mean=1., std=.05, n=100, seed=42,
-                 reduction=StochasticOutputType.MEAN, margin_k=1.645, quantile_q=.95):
+                 reduction=[(StochasticOutputType.MEAN, None)]):
         if n_var < 2:
             raise ValueError('Need at least 2 design variables')
         self.mean = mean
@@ -48,7 +48,7 @@ class StochasticRosenbrock(StochasticArchOptProblem):
         super().__init__(
             [Real(bounds=(-2.048, 2.048)) for _ in range(n_var)],
             param_space=param_space, uq_method_type=UQMethodType.MONTE_CARLO,
-            n_obj=1, obj_type=[reduction], n=n, seed=seed, margin_k=margin_k, quantile_q=quantile_q,
+            n_obj=1, obj_type=reduction, n=n, seed=seed,
         )
 
     def _is_conditionally_active(self) -> List[bool]:

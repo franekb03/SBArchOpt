@@ -30,6 +30,20 @@ class UQMethodType(enum.Flag):
     MONTE_CARLO = enum.auto()
     PCE = enum.auto()
 
+class Mean:
+    def __init__(self):
+        self.type = StochasticOutputType.MEAN
+
+class Margin:
+    def __init__(self, k: float = 1.645) :
+        self.type = StochasticOutputType.MARGIN
+        self.k = k
+
+class Quantile:
+    def __init__(self, q: float = 0.95) :
+        self.type = StochasticOutputType.QUANTILE
+        self.q = q
+
 
 class StochasticParameter:
     """An uncertain parameter: a quantity that influences the evaluation but is not chosen by the optimizer."""
@@ -115,7 +129,7 @@ class StochasticOutput:
     def to_numpy(self) -> np.ndarray:
         return np.array(self.output_samples).flatten()
 
-    def reduce(self, k: float = 1.645, q: float = .95, nan_policy: str = 'propagate') -> float:
+    def reduce(self, param: float = None, nan_policy: str = 'propagate') -> float:
         """
         Reduce the sampled values to the single value the optimizer sees.
 
@@ -143,12 +157,12 @@ class StochasticOutput:
             return float(samples.computeMean()[0])
 
         if output_type == StochasticOutputType.MARGIN:
-            return float(samples.computeMean()[0]) + k * float(samples.computeStandardDeviation()[0])
+            return float(samples.computeMean()[0]) + param * float(samples.computeStandardDeviation()[0])
 
         if output_type == StochasticOutputType.QUANTILE:
-            if not 0. <= q <= 1.:
-                raise ValueError(f'Quantile should be between 0 and 1: {q}')
-            return float(samples.computeQuantile(q)[0])
+            if not 0. <= param <= 1.:
+                raise ValueError(f'Quantile should be between 0 and 1: {param}')
+            return float(samples.computeQuantile(param)[0])
 
         raise ValueError(f'Unknown stochastic metric type: {output_type}')
 

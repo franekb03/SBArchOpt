@@ -7,7 +7,7 @@ Contact: jasper.bussemaker@dlr.de
 Stochastic (robust) architecture optimization problems: the responses are evaluated for a number of samples of the
 uncertain parameters, and the resulting statistics are reduced to the values the optimizer sees.
 """
-from typing import Union, List
+from typing import Union, List, Optional, Tuple
 
 import numpy as np
 from pymoo.core.variable import Variable
@@ -55,9 +55,9 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
     def __init__(self, des_vars: Union[List[Variable], ArchDesignSpace], param_space: StochasticParameterSpace,
                  uq_method_type: UQMethodType, n_obj=1, n_ieq_constr=0, n_eq_constr=0,
-                 obj_type: List[StochasticOutputType] = None, ieq_constr_type: List[StochasticOutputType] = None,
-                 eq_constr_type: List[StochasticOutputType] = None,
-                 n: int = 100, seed: int = None, margin_k: float = 1.645, quantile_q: float = .95,
+                 obj_type: List[Tuple[StochasticOutputType, Optional[float]]] = None, ieq_constr_type: List[Tuple[StochasticOutputType, Optional[float]]] = None,
+                 eq_constr_type: List[Tuple[StochasticOutputType, Optional[float]]] = None,
+                 n: int = 100, seed: int = None,
                  nan_policy: str = 'propagate', uq_method_kwargs: dict = None, **kwargs):
 
         if param_space is None or param_space.n_parameters == 0:
@@ -68,27 +68,25 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             if len(obj_type) != n_obj:
                 raise ValueError(f'obj_type should have n_obj = {n_obj} entries: {len(obj_type)}')
         else:
-            obj_type = [StochasticOutputType.MEAN]*n_obj
+            obj_type = [(StochasticOutputType.MEAN, None)]*n_obj
 
         if n_ieq_constr != 0 and ieq_constr_type is not None:
             if len(ieq_constr_type) != n_ieq_constr:
                 raise ValueError(f'constr_type should have n_ieq_constr = {n_ieq_constr} entries: {len(ieq_constr_type)}')
         else:
-            ieq_constr_type = [StochasticOutputType.MEAN]*n_ieq_constr
+            ieq_constr_type = [(StochasticOutputType.MEAN, None)]*n_ieq_constr
 
         if n_eq_constr != 0 and eq_constr_type is not None:
             if len(eq_constr_type) != n_eq_constr:
                 raise ValueError(f'eq_constr_type should have n_eq_constr = {n_eq_constr} entries: {len(eq_constr_type)}')
         else:
-            eq_constr_type = [StochasticOutputType.MEAN]*n_eq_constr
+            eq_constr_type = [(StochasticOutputType.MEAN, None)]*n_eq_constr
 
         self.obj_type = obj_type
-        self.constr_type = ieq_constr_type
+        self.ieq_constr_type = ieq_constr_type
         self.eq_constr_type = eq_constr_type
         self.stochastic_output_type = obj_type + ieq_constr_type + eq_constr_type
 
-        self.margin_k = margin_k
-        self.quantile_q = quantile_q
         self.nan_policy = nan_policy
 
         if uq_method_type is None or uq_method_type == UQMethodType.NONE:
@@ -101,7 +99,8 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             raise ValueError(f'Unknown UQ method type: {uq_method_type}')
 
         # Method-specific settings, e.g. degree and n_metamodel_samples for polynomial chaos
-        self.uq_method = uq_method_class(param_space, self.stochastic_output_type, n_obj, n_ieq_constr,
+        types = [t for t, _ in self.stochastic_output_type]
+        self.uq_method = uq_method_class(param_space, types, n_obj, n_ieq_constr,
                                          n_eq_constr, n, seed, **(uq_method_kwargs or {}))
 
         # Latest per-design-point statistics, also provided in the evaluation output
@@ -145,7 +144,7 @@ class StochasticArchOptProblem(ArchOptProblemBase):
                 *args, sample=u_samples[sample_i, :], **kwargs)
 
         # Reduce the sampled responses of each design point to the values the optimizer sees
-        k, q, nan_policy = self.margin_k, self.quantile_q, self.nan_policy
+        nan_policy = self.nan_policy
         self.stochastic_results = []
         for x_i in range(n_x):
             result = self.uq_method.process_results(
@@ -153,11 +152,14 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             self.stochastic_results.append(result)
 
             for f_i, output in enumerate(result.f):
-                f_out[x_i, f_i] = output.reduce(k=k, q=q, nan_policy=nan_policy)
+                _, param = self.obj_type[f_i]
+                f_out[x_i, f_i] = output.reduce(param=param, nan_policy=nan_policy)
             for g_i, output in enumerate(result.g):
-                g_out[x_i, g_i] = output.reduce(k=k, q=q, nan_policy=nan_policy)
+                _, param = self.ieq_constr_type[g_i]
+                g_out[x_i, g_i] = output.reduce(param=param, nan_policy=nan_policy)
             for h_i, output in enumerate(result.h):
-                h_out[x_i, h_i] = output.reduce(k=k, q=q, nan_policy=nan_policy)
+                _, param = self.ieq_constr_type[h_i]
+                h_out[x_i, h_i] = output.reduce(param=param, nan_policy=nan_policy)
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, *args, sample: np.ndarray, **kwargs):
