@@ -7,7 +7,7 @@ Contact: jasper.bussemaker@dlr.de
 Stochastic (robust) architecture optimization problems: the responses are evaluated for a number of samples of the
 uncertain parameters, and the resulting statistics are reduced to the values the optimizer sees.
 """
-from typing import Union, List, Optional, Tuple
+from typing import Union, List, Optional
 
 import numpy as np
 from pymoo.core.variable import Variable
@@ -32,81 +32,79 @@ class StochasticArchOptProblem(ArchOptProblemBase):
     cheap analytical problem can evaluate them in one numpy call, while an expensive problem is free to loop over
     (or parallelize across) the rows itself, exactly as a deterministic `_arch_evaluate` would.
 
-    Reduction is controlled per objective and per constraint through `StochasticMetricType`:
-    - MEAN: the expected value
-    - MARGIN: `mean + k*std`; since SBArchOpt objectives are always minimized and inequality constraints are
-      satisfied when <= 0, this penalizes both a bad mean and a large spread for objectives and constraints alike
-    - QUANTILE: the q'th quantile of the samples
+    How each response is reduced is given per objective and per constraint as a `RobustMeasure`, which carries
+    its own parameters: `Mean()`, `Margin(k=2.)`, `Quantile(q=.95)`. Any `RobustMeasure` subclass works, so a new
+    measure needs no change here. Responses default to `Mean()`.
+
+    The uncertainty propagation method is passed as an instance carrying its own settings, e.g.
+    `MonteCarlo(n=100, seed=42)` or `PolynomialChaos(n=200, seed=42, degree=8)`.
+
+        super().__init__(des_vars, param_space=param_space, uq_method=MonteCarlo(n=200, seed=42),
+                         n_obj=1, n_ieq_constr=1,
+                         obj_measure=[Margin(k=2.)], ieq_constr_measure=[Quantile(q=.95)])
 
     The statistics behind the reduced values stay available: a `StochasticResult` per design point is provided in
     the evaluation output under `out['stochastic']`, carrying the `StochasticOutput`s (and therefore mean, std,
     quantiles, and the fitted output distribution) of every response, plus whatever the UQ method produced beyond
     the samples (for polynomial chaos, the fitted `ot.FunctionalChaosResult` of each response).
-
-    The uncertainty propagation method is selected with `uq_method_type` and configured through `n`, `seed` and
-    `uq_method_kwargs`; register additional `UQMethod` subclasses in `UQ_METHODS` to add one.
     """
 
-    #: Available uncertainty propagation methods, by type
-    UQ_METHODS = {
-        UQMethodType.MONTE_CARLO: MonteCarlo,
-        UQMethodType.PCE: PolynomialChaos,
-    }
+    #: Configuration arguments that were replaced by `uq_method` and the `*_measure` lists. Rejected explicitly
+    #: because **kwargs is forwarded to pymoo, which silently ignores names it does not know.
+    _RETIRED_KWARGS = ('obj_type', 'constr_type', 'ieq_constr_type', 'eq_constr_type',
+                       'uq_method_type', 'uq_method_kwargs', 'n', 'seed')
 
     def __init__(self, des_vars: Union[List[Variable], ArchDesignSpace], param_space: StochasticParameterSpace,
-                 uq_method_type: UQMethodType, n_obj=1, n_ieq_constr=0, n_eq_constr=0,
-                 obj_type: List[Tuple[StochasticOutputType, Optional[float]]] = None, ieq_constr_type: List[Tuple[StochasticOutputType, Optional[float]]] = None,
-                 eq_constr_type: List[Tuple[StochasticOutputType, Optional[float]]] = None,
-                 n: int = 100, seed: int = None,
-                 nan_policy: str = 'propagate', uq_method_kwargs: dict = None, **kwargs):
+                 uq_method: UQMethod, n_obj=1, n_ieq_constr=0, n_eq_constr=0,
+                 obj_measure: List[RobustMeasure] = None,
+                 ieq_constr_measure: List[RobustMeasure] = None,
+                 eq_constr_measure: List[RobustMeasure] = None,
+                 nan_policy: str = 'propagate', **kwargs):
+
+        for retired in self._RETIRED_KWARGS:
+            if retired in kwargs:
+                raise TypeError(
+                    f'{retired!r} is no longer accepted: pass a UQMethod instance as uq_method (e.g. '
+                    f'MonteCarlo(n=100, seed=42)) and RobustMeasure lists as obj_measure / ieq_constr_measure / '
+                    f'eq_constr_measure')
 
         if param_space is None or param_space.n_parameters == 0:
             raise ValueError('Define stochastic parameter space for the robust problem.')
         self.param_space = param_space
 
-        if n_obj != 0 and obj_type is not None:
-            if len(obj_type) != n_obj:
-                raise ValueError(f'obj_type should have n_obj = {n_obj} entries: {len(obj_type)}')
-        else:
-            obj_type = [(StochasticOutputType.MEAN, None)]*n_obj
-
-        if n_ieq_constr != 0 and ieq_constr_type is not None:
-            if len(ieq_constr_type) != n_ieq_constr:
-                raise ValueError(f'constr_type should have n_ieq_constr = {n_ieq_constr} entries: {len(ieq_constr_type)}')
-        else:
-            ieq_constr_type = [(StochasticOutputType.MEAN, None)]*n_ieq_constr
-
-        if n_eq_constr != 0 and eq_constr_type is not None:
-            if len(eq_constr_type) != n_eq_constr:
-                raise ValueError(f'eq_constr_type should have n_eq_constr = {n_eq_constr} entries: {len(eq_constr_type)}')
-        else:
-            eq_constr_type = [(StochasticOutputType.MEAN, None)]*n_eq_constr
-
-        self.obj_type = obj_type
-        self.ieq_constr_type = ieq_constr_type
-        self.eq_constr_type = eq_constr_type
-        self.stochastic_output_type = obj_type + ieq_constr_type + eq_constr_type
+        self.obj_measure = self._check_measures(obj_measure, n_obj, 'obj_measure')
+        self.ieq_constr_measure = self._check_measures(ieq_constr_measure, n_ieq_constr, 'ieq_constr_measure')
+        self.eq_constr_measure = self._check_measures(eq_constr_measure, n_eq_constr, 'eq_constr_measure')
+        self.measures = self.obj_measure + self.ieq_constr_measure + self.eq_constr_measure
 
         self.nan_policy = nan_policy
 
-        if uq_method_type is None or uq_method_type == UQMethodType.NONE:
-            raise ValueError('UQ method type must be specified')
-        if n is None:
-            raise ValueError('n must be specified: it is the number of expensive evaluations per design point')
+        if uq_method is None:
+            raise ValueError('A UQ method must be specified, e.g. uq_method=MonteCarlo(n=100, seed=42)')
+        if not isinstance(uq_method, UQMethod):
+            raise ValueError(f'uq_method should be a UQMethod instance, got: {uq_method!r}')
 
-        uq_method_class = self.UQ_METHODS.get(uq_method_type)
-        if uq_method_class is None:
-            raise ValueError(f'Unknown UQ method type: {uq_method_type}')
-
-        # Method-specific settings, e.g. degree and n_metamodel_samples for polynomial chaos
-        types = [t for t, _ in self.stochastic_output_type]
-        self.uq_method = uq_method_class(param_space, types, n_obj, n_ieq_constr,
-                                         n_eq_constr, n, seed, **(uq_method_kwargs or {}))
+        # Attach the problem structure the method could not know at construction time
+        uq_method.bind(param_space, self.measures, n_obj, n_ieq_constr, n_eq_constr)
+        self.uq_method = uq_method
 
         # Latest per-design-point statistics, also provided in the evaluation output
         self.stochastic_results: List[StochasticResult] = []
 
         super().__init__(des_vars, n_obj=n_obj, n_ieq_constr=n_ieq_constr, n_eq_constr=n_eq_constr, **kwargs)
+
+    @staticmethod
+    def _check_measures(measures: Optional[List[RobustMeasure]], n: int, name: str) -> List[RobustMeasure]:
+        """Default unspecified responses to the expected value, and check the count"""
+        if measures is None:
+            return [Mean() for _ in range(n)]
+
+        if len(measures) != n:
+            raise ValueError(f'{name} should have {n} entries: {len(measures)}')
+        for measure in measures:
+            if not isinstance(measure, RobustMeasure):
+                raise ValueError(f'{name} should contain RobustMeasure instances, got: {measure!r}')
+        return list(measures)
 
     def _evaluate(self, x, out, *args, **kwargs):
         super()._evaluate(x, out, *args, **kwargs)
@@ -151,15 +149,14 @@ class StochasticArchOptProblem(ArchOptProblemBase):
                 np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1))
             self.stochastic_results.append(result)
 
+            # Each output carries its own measure, so the same call reduces objectives, inequality constraints
+            # and equality constraints alike - there is no per-kind parameter list to index into
             for f_i, output in enumerate(result.f):
-                _, param = self.obj_type[f_i]
-                f_out[x_i, f_i] = output.reduce(param=param, nan_policy=nan_policy)
+                f_out[x_i, f_i] = output.reduce(nan_policy=nan_policy)
             for g_i, output in enumerate(result.g):
-                _, param = self.ieq_constr_type[g_i]
-                g_out[x_i, g_i] = output.reduce(param=param, nan_policy=nan_policy)
+                g_out[x_i, g_i] = output.reduce(nan_policy=nan_policy)
             for h_i, output in enumerate(result.h):
-                _, param = self.ieq_constr_type[h_i]
-                h_out[x_i, h_i] = output.reduce(param=param, nan_policy=nan_policy)
+                h_out[x_i, h_i] = output.reduce(nan_policy=nan_policy)
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, *args, sample: np.ndarray, **kwargs):
