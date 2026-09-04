@@ -79,8 +79,8 @@ def test_parameter_space_joint_dist():
 """### Reduction ###"""
 
 
-def _output(values, measure):
-    return StochasticOutput(ot.Sample(np.array(values, dtype=float).reshape((-1, 1))), measure)
+def _output(values):
+    return StochasticOutput(ot.Sample(np.array(values, dtype=float).reshape((-1, 1))))
 
 
 def _space(n=1):
@@ -91,17 +91,17 @@ def _space(n=1):
 
 
 def test_reduce_mean():
-    assert _output([1., 2., 3.], Mean()).reduce() == pytest.approx(2.)
+    assert _output([1., 2., 3.]).reduce(Mean()) == pytest.approx(2.)
 
 
 def test_reduce_margin_matches_margin_method():
-    out = _output([1., 2., 3., 4.], Margin(k=2.))
-    assert out.reduce() == pytest.approx(out.margin(2.))
+    out = _output([1., 2., 3., 4.])
+    assert out.reduce(Margin(k=2.)) == pytest.approx(out.margin(2.))
 
 
 def test_reduce_quantile_matches_quantile_method():
-    out = _output(np.linspace(0., 10., 101), Quantile(q=.9))
-    assert out.reduce() == pytest.approx(out.quantile(.9))
+    out = _output(np.linspace(0., 10., 101))
+    assert out.reduce(Quantile(q=.9)) == pytest.approx(out.quantile(.9))
 
 
 def test_measure_parameters_validated_at_construction():
@@ -111,10 +111,10 @@ def test_measure_parameters_validated_at_construction():
 
 
 def test_measures_carry_their_own_parameters():
-    """Two outputs of the same kind but different parameters reduce differently, with nothing passed at reduce"""
-    values = np.linspace(0., 10., 101)
-    assert _output(values, Quantile(q=.5)).reduce() != _output(values, Quantile(q=.95)).reduce()
-    assert _output(values, Margin(k=1.)).reduce() != _output(values, Margin(k=3.)).reduce()
+    """Two measures of the same kind but different parameters reduce the same samples differently"""
+    out = _output(np.linspace(0., 10., 101))
+    assert out.reduce(Quantile(q=.5)) != out.reduce(Quantile(q=.95))
+    assert out.reduce(Margin(k=1.)) != out.reduce(Margin(k=3.))
 
 
 def test_custom_measure_needs_no_library_change():
@@ -123,36 +123,42 @@ def test_custom_measure_needs_no_library_change():
         def reduce(self, samples):
             return float(samples.getMax()[0])
 
-    assert _output([1., 5., 3.], WorstCase()).reduce() == pytest.approx(5.)
+    assert _output([1., 5., 3.]).reduce(WorstCase()) == pytest.approx(5.)
 
 
 def test_reduce_rejects_unknown_nan_policy():
     with pytest.raises(ValueError):
-        _output([1., 2.], Mean()).reduce(nan_policy='whatever')
+        _output([1., 2.]).reduce(Mean(), nan_policy='whatever')
 
 
-def test_uq_method_checks_measure_count_on_bind():
+"""### UQ methods ###"""
+
+
+def test_uq_method_takes_the_parameter_space_as_a_call_parameter():
+    """A method carries no problem-specific state: the space it samples is passed in, not bound at construction"""
     method = MonteCarlo(n_evaluations=10)
+    assert method.get_samples(_space(2)).shape == (10, 2)
+
+
+def test_uq_method_needs_a_parameter_space_to_sample():
     with pytest.raises(ValueError):
-        method.add_config(_space(), [Mean()], n_obj=1, n_ieq_constr=1, n_eq_constr=0)
+        MonteCarlo(n_evaluations=10).get_samples(None)
 
 
-def test_uq_method_must_be_bound_before_use():
-    with pytest.raises(RuntimeError):
-        MonteCarlo(n_evaluations=10).get_samples()
-
-
-def test_process_results_splits_columns():
+def test_process_results_gives_one_output_per_column():
     method = MonteCarlo(n_evaluations=3)
-    method.add_config(_space(), [Mean()]*3, n_obj=1, n_ieq_constr=2, n_eq_constr=0)
 
-    result = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]))
-    assert len(result.f) == 1
-    assert len(result.g) == 2
-    assert len(result.h) == 0
-    assert result.f[0].mean() == pytest.approx(2.)
-    assert result.g[0].mean() == pytest.approx(11.)
-    assert result.g[1].mean() == pytest.approx(21.)
+    result = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]), _space())
+    assert len(result.outputs) == 3
+    assert result.outputs[0].mean() == pytest.approx(2.)
+    assert result.outputs[1].mean() == pytest.approx(11.)
+    assert result.outputs[2].mean() == pytest.approx(21.)
+
+
+def test_process_results_checks_the_number_of_sample_rows():
+    method = MonteCarlo(n_evaluations=3)
+    with pytest.raises(ValueError):
+        method.process_results(np.array([[1.], [2.]]), _space())
 
 
 """### The evaluation loop ###"""
@@ -262,10 +268,12 @@ def test_equality_constraints_use_their_own_measure():
     out = problem.evaluate(np.array([[.5]]), return_as_dictionary=True)
 
     result = out['stochastic'][0]
+    f_output, g_output, h_output = result.outputs  # one objective, one inequality and one equality constraint
     # H is declared as Margin(k=3.) while G is Mean(): the two must not agree
-    assert out['H'][0, 0] == pytest.approx(result.h[0].margin(3.))
-    assert out['G'][0, 0] == pytest.approx(result.g[0].mean())
-    assert out['H'][0, 0] != pytest.approx(result.h[0].mean())
+    assert out['H'][0, 0] == pytest.approx(h_output.margin(3.))
+    assert out['G'][0, 0] == pytest.approx(g_output.mean())
+    assert out['H'][0, 0] != pytest.approx(h_output.mean())
+    assert out['F'][0, 0] == pytest.approx(f_output.mean())
 
 
 def test_measure_counts_checked_per_response_kind():
@@ -283,8 +291,8 @@ def test_statistics_available_per_design_point():
     assert len(out['stochastic']) == 2
     for result in out['stochastic']:
         assert isinstance(result, StochasticResult)
-        assert len(result.f) == 1
-        assert len(result.f[0].to_numpy()) == 100
+        assert len(result.outputs) == 1
+        assert len(result.outputs[0].to_numpy()) == 100
 
 
 def test_reported_statistics_reproduce_the_reduced_value():
@@ -294,8 +302,8 @@ def test_reported_statistics_reproduce_the_reduced_value():
     out = problem.evaluate(np.array([[1, .6, .25]]), return_as_dictionary=True)
 
     result = out['stochastic'][0]
-    assert result.f[0].margin(2.) == pytest.approx(out['F'][0, 0])
-    assert result.g[0].quantile(.95) == pytest.approx(out['G'][0, 0])
+    assert result.outputs[0].margin(2.) == pytest.approx(out['F'][0, 0])
+    assert result.outputs[1].quantile(.95) == pytest.approx(out['G'][0, 0])
 
 
 """### Hidden constraints ###"""
@@ -320,7 +328,7 @@ def test_nan_policy_omit_reduces_over_surviving_samples():
     problem = FailingProblem(n=50, seed=3, nan_policy='omit')
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
 
-    values = out['stochastic'][0].f[0].to_numpy()
+    values = out['stochastic'][0].outputs[0].to_numpy()
     assert np.any(~np.isfinite(values))  # some samples did fail
     assert np.isfinite(out['F'][0, 0])  # but the design point still has a value
     assert out['F'][0, 0] == pytest.approx(np.mean(values[np.isfinite(values)]))
@@ -378,7 +386,7 @@ class QuadraticProblem(StochasticArchOptProblem):
         param_space.add_parameter(StochasticParameter('u', ot.Normal(1., .05)))
         self.fail = fail
         super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))], param_space=param_space,
-                         uq_method=uq_method_class(n=n, seed=42, **(method_kwargs or {})),
+                         uq_method=uq_method_class(n_evaluations=n, seed=42, **(method_kwargs or {})),
                          n_obj=1, obj_measure=[Mean()], **kwargs)
 
     def _is_conditionally_active(self):
@@ -407,12 +415,29 @@ def test_pce_kwargs_are_passed_through():
 
 
 def test_pce_n_terms():
-    space = StochasticParameterSpace()
-    for name in ['a', 'b', 'c']:
-        space.add_parameter(StochasticParameter(name, ot.Normal(0., 1.)))
+    """The number of terms depends on the parameter space, which is a call parameter rather than stored state"""
     method = PolynomialChaos(n_evaluations=200, degree=8)
-    method.add_config(_space(3), [Mean()], n_obj=1, n_ieq_constr=0, n_eq_constr=0)
-    assert method.n_terms == 165  # degree 8 in 3 dimensions
+    assert method.n_terms(_space(3)) == 165  # degree 8 in 3 dimensions
+    assert method.n_terms(_space(1)) == 9  # degree 8 in 1 dimension
+
+
+def test_pce_needs_enough_samples_to_fit_the_expansion():
+    """A degree-8 expansion in 3 parameters has 165 terms, so 10 samples cannot fit it"""
+    method = PolynomialChaos(n_evaluations=10, degree=8)
+    with pytest.raises(ValueError):
+        method.get_samples(_space(3))
+
+
+def test_pce_draws_a_latin_hypercube():
+    """PCE fits an expansion rather than averaging, so it uses an LHS design instead of plain Monte Carlo"""
+    space = _space(2)
+    samples = PolynomialChaos(n_evaluations=40, seed=42).get_samples(space)
+    assert samples.shape == (40, 2)
+
+    # An LHS puts exactly one point in each of the n equiprobable strata of every marginal
+    for i_param in range(2):
+        cdf = np.array([space.parameters[i_param].distribution.computeCDF(v) for v in samples[:, i_param]])
+        assert len(np.unique(np.floor(cdf*40).astype(int))) == 40
 
 
 
@@ -465,11 +490,11 @@ def test_pce_falls_back_to_raw_samples_when_evaluations_fail():
 
 def test_pce_uses_all_samples_it_asked_for():
     problem = QuadraticProblem(PolynomialChaos, n=40)
-    assert problem.uq_method.get_samples().shape == (40, 1)
+    assert problem.uq_method.get_samples(problem.param_space).shape == (40, 1)
 
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
     # statistics come from the cheap metamodel, not from the 40 expensive evaluations
-    assert len(out['stochastic'][0].f[0].to_numpy()) == problem.uq_method.n_metamodel_samples
+    assert len(out['stochastic'][0].outputs[0].to_numpy()) == problem.uq_method.n_metamodel_samples
 
 
 """### Test problem ###"""

@@ -135,9 +135,12 @@ class StochasticOutput:
     def to_numpy(self) -> np.ndarray:
         return np.array(self.output_samples).flatten()
 
-    def reduce(self, measure:RobustMeasure, nan_policy: str = 'propagate') -> float:
+    def reduce(self, measure: RobustMeasure, nan_policy: str = 'propagate') -> float:
         """
-        Reduce the sampled values to the single value the optimizer sees, by applying this output's measure.
+        Reduce the sampled values to the single value the optimizer sees, by applying the given measure.
+
+        The measure is passed in rather than stored: an output is just the sampled values, and which statistic
+        of them the optimizer sees is the problem's business (see `StochasticArchOptProblem`).
 
         `nan_policy` controls what happens when some samples failed to evaluate (NaN, i.e. hidden constraints):
         - 'propagate': any failed sample makes the whole design point fail (the value becomes NaN). This is the
@@ -169,45 +172,28 @@ class StochasticResult:
     chaos that is the list of `ot.FunctionalChaosResult`s, from which for example Sobol indices can be obtained.
     """
 
-    def __init__(self, outputs: List[StochasticOutput],
-                 method_result=None):
+    def __init__(self, outputs: List[StochasticOutput], method_result=None):
         self.outputs = outputs
         self.method_result = method_result
-
 
 
 class UQMethod:
     """
     Base class for an uncertainty propagation method.
+
+    A method only knows how many expensive evaluations per design point it is allowed to spend; everything that
+    depends on the problem it is used for (the parameter space, the number of responses, the robust measures) is
+    passed in as a method parameter, so the same instance carries no problem-specific state.
     """
 
     def __init__(self, n_evaluations: int, seed: int = None):
         if n_evaluations is None:
-            raise ValueError('n_evaluations must be specified: it is the number of expensive evaluations per design point')
+            raise ValueError('n_evaluations must be specified: it is the number of expensive evaluations '
+                             'per design point')
         self.n_evaluations = n_evaluations
         self.seed = seed
 
-        # # Set by add_config()
-        # self.parameters_space: Optional[StochasticParameterSpace] = None
-        # self.measures: Optional[List[RobustMeasure]] = None
-        # self.n_obj: Optional[int] = None
-        # self.n_ieq_constr: Optional[int] = None
-        # self.n_eq_constr: Optional[int] = None
-
         self._samples: Optional[np.ndarray] = None
-
-    # def add_config(self, parameters_space: StochasticParameterSpace, measures: List[RobustMeasure],
-    #                n_obj: int, n_ieq_constr: int, n_eq_constr: int):
-    #     self.parameters_space = parameters_space
-    #     self.measures = list(measures)
-    #     self.n_obj = n_obj
-    #     self.n_ieq_constr = n_ieq_constr
-    #     self.n_eq_constr = n_eq_constr
-    #
-    #     n_expected = n_obj + n_ieq_constr + n_eq_constr
-    #     if len(self.measures) != n_expected:
-    #         raise ValueError(f'Expected {n_expected} measures (n_obj + n_ieq_constr + n_eq_constr), '
-    #                          f'got {len(self.measures)}')
 
     @property
     def n_samples(self) -> int:
@@ -216,20 +202,34 @@ class UQMethod:
 
     def get_samples(self, parameters_space: StochasticParameterSpace) -> np.ndarray:
         """The parameter samples to evaluate, as an n_samples x n_parameters matrix"""
+        if parameters_space is None:
+            raise ValueError('No parameter space to sample')
         if self._samples is None:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
-            self._samples = parameters_space.get_samples(self.n_evaluations)
+            self._samples = self.draw_samples(parameters_space)
         return self._samples
+
+    def draw_samples(self, parameters_space: StochasticParameterSpace) -> np.ndarray:
+        """Draw the design of experiments in the parameter space; override to use a different design"""
+        return parameters_space.get_samples(self.n_evaluations)
 
     def resample(self):
         """Draw a new design on the next evaluation"""
         self._samples = None
 
-    def process_results(self, results: np.ndarray) -> StochasticResult:
+    def check_results(self, results: np.ndarray):
+        """The results of one design point must have one row per evaluated parameter sample"""
+        if results.ndim != 2:
+            raise ValueError(f'Expected a 2D (n_samples x n_outputs) results matrix, got {results.ndim}D')
+        if results.shape[0] != self.n_samples:
+            raise ValueError(f'Expected {self.n_samples} response rows, got {results.shape[0]}')
+
+    def process_results(self, results: np.ndarray,
+                        parameters_space: StochasticParameterSpace) -> StochasticResult:
         """
         Turn the responses of ONE design point (an n_samples x (n_obj+n_ieq_constr+n_eq_constr) matrix) into the
-        stochastic outputs of that design point.
+        stochastic outputs of that design point, in the same column order.
         """
         raise NotImplementedError
 
@@ -239,22 +239,26 @@ class MonteCarlo(UQMethod):
     Monte Carlo uncertainty propagation
     """
 
-    def process_results(self, results: np.ndarray) -> StochasticResult:
-        sample = ot.Sample(np.asarray(results, dtype=float))
-        outputs = [StochasticOutput.from_results(sample, i)
-                   for i in range(results.shape[1])]
+    def process_results(self, results: np.ndarray,
+                        parameters_space: StochasticParameterSpace = None) -> StochasticResult:
+        results = np.asarray(results, dtype=float)
+        self.check_results(results)
+
+        sample = ot.Sample(results)
+        outputs = [StochasticOutput.from_results(sample, i) for i in range(results.shape[1])]
         return StochasticResult(outputs)
 
 
 class PolynomialChaos(UQMethod):
     """
     Polynomial chaos expansion (PCE): a surrogate of each response as a function of the uncertain parameters is
-    fitted from n evaluations of the expensive model, and the statistics are then taken from that surrogate.
+    fitted from n_evaluations evaluations of the expensive model, and the statistics are then taken from that
+    surrogate.
 
-    The expensive model is evaluated `n` times per design point, exactly like Monte Carlo, but the statistics come
-    from `n_metamodel_samples` evaluations of the cheap fitted expansion instead of from the n expensive ones. For a
-    response that the expansion represents well this gives far more accurate quantiles and tail statistics for the
-    same number of expensive evaluations.
+    The expensive model is evaluated `n_evaluations` times per design point, exactly like Monte Carlo, but the
+    statistics come from `n_metamodel_samples` evaluations of the cheap fitted expansion instead of from the
+    expensive ones. For a response that the expansion represents well this gives far more accurate quantiles and
+    tail statistics for the same number of expensive evaluations.
 
     The fitted `ot.FunctionalChaosResult` of each response is kept on the `StochasticResult` (`method_result`), so
     Sobol sensitivity indices are available for free through `ot.FunctionalChaosSobolIndices`.
@@ -269,27 +273,37 @@ class PolynomialChaos(UQMethod):
         self._metamodel_input: Optional[ot.Sample] = None
         super().__init__(n_evaluations, seed)
 
-    @property
     def n_terms(self, parameters_space: StochasticParameterSpace) -> int:
         """Number of terms in the expansion, i.e. the minimum number of samples needed to fit it"""
         enumerate_function = ot.LinearEnumerateFunction(parameters_space.n_parameters)
         return int(enumerate_function.getStrataCumulatedCardinal(self.degree))
 
-    def draw_samples(self) -> np.ndarray:
+    def _validate(self, parameters_space: StochasticParameterSpace):
+        # Needs the parameter space, since the number of terms depends on the number of parameters
+        n_terms = self.n_terms(parameters_space)
+        if self.n_evaluations < n_terms:
+            raise ValueError(f'A degree-{self.degree} expansion in {parameters_space.n_parameters} '
+                             f'parameters has {n_terms} terms, so it needs at least that many samples to fit: '
+                             f'n_evaluations = {self.n_evaluations}')
+
+    def draw_samples(self, parameters_space: StochasticParameterSpace) -> np.ndarray:
+        self._validate(parameters_space)
+
         # A Latin hypercube covers the parameter space more evenly than plain Monte Carlo, which matters when the
         # design is used to fit an expansion rather than to average over
-        experiment = ot.LHSExperiment(self.parameters_space.joint_dist, self.n_evaluations, False, True)
+        experiment = ot.LHSExperiment(parameters_space.joint_dist, self.n_evaluations, False, True)
         samples = experiment.generate()
-        self.parameters_space.sample = samples
+        parameters_space.sample = samples
         return np.array(samples)
 
-    def _get_metamodel_input(self) -> ot.Sample:
+    def _get_metamodel_input(self, parameters_space: StochasticParameterSpace) -> ot.Sample:
         if self._metamodel_input is None:
-            self._metamodel_input = self.parameters_space.joint_dist.getSample(self.n_metamodel_samples)
+            self._metamodel_input = parameters_space.joint_dist.getSample(self.n_metamodel_samples)
         return self._metamodel_input
 
-    def _build_algorithm(self, input_sample: ot.Sample, output_sample: ot.Sample) -> ot.FunctionalChaosAlgorithm:
-        distribution = self.parameters_space.joint_dist
+    def _build_algorithm(self, input_sample: ot.Sample, output_sample: ot.Sample,
+                         parameters_space: StochasticParameterSpace) -> ot.FunctionalChaosAlgorithm:
+        distribution = parameters_space.joint_dist
         dimension = distribution.getDimension()
 
         polynomials = [ot.StandardDistributionPolynomialFactory(distribution.getMarginal(i))
@@ -297,17 +311,18 @@ class PolynomialChaos(UQMethod):
         enumerate_function = ot.LinearEnumerateFunction(dimension)
         basis = ot.OrthogonalProductPolynomialFactory(polynomials, enumerate_function)
 
-        adaptive_strategy = ot.FixedStrategy(basis, self.n_terms)
+        adaptive_strategy = ot.FixedStrategy(basis, self.n_terms(parameters_space))
         projection_strategy = ot.LeastSquaresStrategy()
         return ot.FunctionalChaosAlgorithm(input_sample, output_sample, distribution,
                                            adaptive_strategy, projection_strategy)
 
-    def process_results(self, results: np.ndarray) -> StochasticResult:
-
+    def process_results(self, results: np.ndarray,
+                        parameters_space: StochasticParameterSpace) -> StochasticResult:
         results = np.asarray(results, dtype=float)
+        self.check_results(results)
 
-        input_sample = ot.Sample(self.get_samples())
-        metamodel_input = self._get_metamodel_input()
+        input_sample = ot.Sample(self.get_samples(parameters_space))
+        metamodel_input = self._get_metamodel_input(parameters_space)
 
         outputs, chaos_results = [], []
         for i_out in range(results.shape[1]):
@@ -320,7 +335,8 @@ class PolynomialChaos(UQMethod):
                 chaos_results.append(None)
 
             else:
-                algorithm = self._build_algorithm(input_sample, ot.Sample(values.reshape((-1, 1))))
+                algorithm = self._build_algorithm(input_sample, ot.Sample(values.reshape((-1, 1))),
+                                                  parameters_space)
                 algorithm.run()
                 chaos_result = algorithm.getResult()
                 chaos_results.append(chaos_result)
