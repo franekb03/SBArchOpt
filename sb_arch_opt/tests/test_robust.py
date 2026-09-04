@@ -512,3 +512,28 @@ def test_stochastic_rosenbrock():
     # Moving away from the optimum makes it worse
     f_off = problem.evaluate(np.array([[.5, .5, .5]]), return_as_dictionary=True)['F']
     assert f_off[0, 0] > out['F'][0, 0]
+
+def test_samples_are_reused_for_the_same_parameter_space():
+    """Common random numbers: every design point sees the same realizations"""
+    space = _space()
+    method = MonteCarlo(n_evaluations=20, seed=42)
+
+    assert np.all(method.get_samples(space) == method.get_samples(space))
+
+
+def test_samples_are_redrawn_for_a_different_parameter_space():
+    """A cached design describes the space it was drawn for; reusing it for another one is silently wrong"""
+    space = _space()
+    other = StochasticParameterSpace()
+    other.add_parameter(StochasticParameter('p1', ot.Normal(100., 5.)))
+    other.add_parameter(StochasticParameter('p2', ot.Normal(100., 5.)))
+
+    method = MonteCarlo(n_evaluations=20, seed=42)
+    first = method.get_samples(space).copy()
+    second = method.get_samples(other)
+
+    assert not np.allclose(first, second)
+    assert second.mean() == pytest.approx(100., abs=5.)
+
+    # ... and going back to the first space redraws again, rather than returning the other space's design
+    assert np.allclose(method.get_samples(space), first)

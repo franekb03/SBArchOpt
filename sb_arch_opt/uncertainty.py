@@ -194,6 +194,7 @@ class UQMethod:
         self.seed = seed
 
         self._samples: Optional[np.ndarray] = None
+        self._samples_space: Optional[StochasticParameterSpace] = None
 
     @property
     def n_samples(self) -> int:
@@ -201,13 +202,23 @@ class UQMethod:
         return self.n_evaluations
 
     def get_samples(self, parameters_space: StochasticParameterSpace) -> np.ndarray:
-        """The parameter samples to evaluate, as an n_samples x n_parameters matrix"""
+        """
+        The parameter samples to evaluate, as an n_samples x n_parameters matrix.
+
+        The design is drawn once and then reused, so that every design point is evaluated at the same realizations
+        of the uncertain parameters (common random numbers): that is what makes design points comparable to each
+        other, and a surrogate fitted through them smooth. Call `resample` to force a new design.
+
+        The reuse is per parameter space: handing a *different* space redraws, since the cached design describes
+        the parameters of the space it was drawn for and silently means something else for another one.
+        """
         if parameters_space is None:
             raise ValueError('No parameter space to sample')
-        if self._samples is None:
+        if self._samples is None or self._samples_space is not parameters_space:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
             self._samples = self.draw_samples(parameters_space)
+            self._samples_space = parameters_space
         return self._samples
 
     def draw_samples(self, parameters_space: StochasticParameterSpace) -> np.ndarray:
@@ -217,6 +228,7 @@ class UQMethod:
     def resample(self):
         """Draw a new design on the next evaluation"""
         self._samples = None
+        self._samples_space = None
 
     def check_results(self, results: np.ndarray):
         """The results of one design point must have one row per evaluated parameter sample"""
@@ -271,6 +283,7 @@ class PolynomialChaos(UQMethod):
         self.degree = degree
         self.n_metamodel_samples = n_metamodel_samples
         self._metamodel_input: Optional[ot.Sample] = None
+        self._metamodel_input_space: Optional[StochasticParameterSpace] = None
         super().__init__(n_evaluations, seed)
 
     def n_terms(self, parameters_space: StochasticParameterSpace) -> int:
@@ -297,8 +310,10 @@ class PolynomialChaos(UQMethod):
         return np.array(samples)
 
     def _get_metamodel_input(self, parameters_space: StochasticParameterSpace) -> ot.Sample:
-        if self._metamodel_input is None:
+        # Like the expensive design, drawn once and reused, and redrawn for a different parameter space
+        if self._metamodel_input is None or self._metamodel_input_space is not parameters_space:
             self._metamodel_input = parameters_space.joint_dist.getSample(self.n_metamodel_samples)
+            self._metamodel_input_space = parameters_space
         return self._metamodel_input
 
     def _build_algorithm(self, input_sample: ot.Sample, output_sample: ot.Sample,
