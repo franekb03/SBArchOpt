@@ -48,7 +48,7 @@ class StochasticRosenbrock(StochasticArchOptProblem):
         super().__init__(
             [Real(bounds=(-2.048, 2.048)) for _ in range(n_var)],
             param_space=param_space,
-            uq_method=uq_method if uq_method is not None else MonteCarlo(n=n, seed=seed),
+            uq_method=uq_method if uq_method is not None else MonteCarlo(n_evaluations=n, seed=seed),
             n_obj=1, obj_measure=obj_measure,
         )
 
@@ -78,4 +78,4 @@ class StochasticRosenbrock(StochasticArchOptProblem):
         return np.full((1, self.n_var), self.mean)
 
     def __repr__(self):
-        return f'{self.__class__.__name__}(n_var={self.n_var}, std={self.std}, n={self.uq_method.n})'
+        return f'{self.__class__.__name__}(n_var={self.n_var}, std={self.std}, n={self.uq_method.n_evaluations})'

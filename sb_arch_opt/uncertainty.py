@@ -100,14 +100,13 @@ class StochasticParameterSpace:
 class StochasticOutput:
     """The sampled values of one response (objective or constraint) for one design point."""
 
-    def __init__(self, output_samples: ot.Sample, measure: RobustMeasure):
+    def __init__(self, output_samples: ot.Sample):
         self.output_samples = output_samples          # ot.Sample of shape (n, 1)
-        self.measure = measure
 
     @classmethod
-    def from_results(cls, results: ot.Sample, index: int, measure: RobustMeasure) -> 'StochasticOutput':
+    def from_results(cls, results: ot.Sample, index: int) -> 'StochasticOutput':
         """Extract one response's column from the full (n_samples, n_outputs) results of a single design point."""
-        return cls(output_samples=results.getMarginal(index), measure=measure)
+        return cls(output_samples=results.getMarginal(index))
 
     def mean(self) -> float:
         return self.output_samples.computeMean()[0]
@@ -136,7 +135,7 @@ class StochasticOutput:
     def to_numpy(self) -> np.ndarray:
         return np.array(self.output_samples).flatten()
 
-    def reduce(self, nan_policy: str = 'propagate') -> float:
+    def reduce(self, measure:RobustMeasure, nan_policy: str = 'propagate') -> float:
         """
         Reduce the sampled values to the single value the optimizer sees, by applying this output's measure.
 
@@ -159,7 +158,7 @@ class StochasticOutput:
         else:
             raise ValueError(f'Unknown nan_policy: {nan_policy!r} (expected "propagate" or "omit")')
 
-        return self.measure.reduce(samples)
+        return measure.reduce(samples)
 
 
 class StochasticResult:
@@ -170,16 +169,10 @@ class StochasticResult:
     chaos that is the list of `ot.FunctionalChaosResult`s, from which for example Sobol indices can be obtained.
     """
 
-    def __init__(self, f: List[StochasticOutput], g: List[StochasticOutput], h: List[StochasticOutput],
+    def __init__(self, outputs: List[StochasticOutput],
                  method_result=None):
-        self.f = f
-        self.g = g
-        self.h = h
+        self.outputs = outputs
         self.method_result = method_result
-
-    @property
-    def get_list(self) -> List[StochasticOutput]:
-        return self.f + self.g + self.h
 
 
 
@@ -188,47 +181,45 @@ class UQMethod:
     Base class for an uncertainty propagation method.
     """
 
-    def __init__(self, n: int, seed: int = None):
-        if n is None:
-            raise ValueError('n must be specified: it is the number of expensive evaluations per design point')
-        self.n = n
+    def __init__(self, n_evaluations: int, seed: int = None):
+        if n_evaluations is None:
+            raise ValueError('n_evaluations must be specified: it is the number of expensive evaluations per design point')
+        self.n_evaluations = n_evaluations
         self.seed = seed
 
-        # Set by add_config()
-        self.parameters_space: Optional[StochasticParameterSpace] = None
-        self.measures: Optional[List[RobustMeasure]] = None
-        self.n_obj: Optional[int] = None
-        self.n_ieq_constr: Optional[int] = None
-        self.n_eq_constr: Optional[int] = None
+        # # Set by add_config()
+        # self.parameters_space: Optional[StochasticParameterSpace] = None
+        # self.measures: Optional[List[RobustMeasure]] = None
+        # self.n_obj: Optional[int] = None
+        # self.n_ieq_constr: Optional[int] = None
+        # self.n_eq_constr: Optional[int] = None
 
         self._samples: Optional[np.ndarray] = None
 
-    def add_config(self, parameters_space: StochasticParameterSpace, measures: List[RobustMeasure],
-                   n_obj: int, n_ieq_constr: int, n_eq_constr: int):
-        self.parameters_space = parameters_space
-        self.measures = list(measures)
-        self.n_obj = n_obj
-        self.n_ieq_constr = n_ieq_constr
-        self.n_eq_constr = n_eq_constr
-
-        n_expected = n_obj + n_ieq_constr + n_eq_constr
-        if len(self.measures) != n_expected:
-            raise ValueError(f'Expected {n_expected} measures (n_obj + n_ieq_constr + n_eq_constr), '
-                             f'got {len(self.measures)}')
+    # def add_config(self, parameters_space: StochasticParameterSpace, measures: List[RobustMeasure],
+    #                n_obj: int, n_ieq_constr: int, n_eq_constr: int):
+    #     self.parameters_space = parameters_space
+    #     self.measures = list(measures)
+    #     self.n_obj = n_obj
+    #     self.n_ieq_constr = n_ieq_constr
+    #     self.n_eq_constr = n_eq_constr
+    #
+    #     n_expected = n_obj + n_ieq_constr + n_eq_constr
+    #     if len(self.measures) != n_expected:
+    #         raise ValueError(f'Expected {n_expected} measures (n_obj + n_ieq_constr + n_eq_constr), '
+    #                          f'got {len(self.measures)}')
 
     @property
     def n_samples(self) -> int:
         """Number of parameter samples this method evaluates per design point"""
-        return self.n
+        return self.n_evaluations
 
-    def get_samples(self) -> np.ndarray:
+    def get_samples(self, parameters_space: StochasticParameterSpace) -> np.ndarray:
         """The parameter samples to evaluate, as an n_samples x n_parameters matrix"""
-        if self.parameters_space is None:
-            raise RuntimeError('No parameter space to evaluate')
         if self._samples is None:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
-            self._samples = self.parameters_space.get_samples(self.n)
+            self._samples = parameters_space.get_samples(self.n_evaluations)
         return self._samples
 
     def resample(self):
@@ -242,18 +233,6 @@ class UQMethod:
         """
         raise NotImplementedError
 
-    def check_results(self, results: np.ndarray):
-        if self.parameters_space is None:
-            raise RuntimeError('No parameter space to evaluate')
-        if results.shape[1] != len(self.measures):
-            raise ValueError(f'Expected {len(self.measures)} response columns, got {results.shape[1]}')
-        if results.shape[0] != self.n_samples:
-            raise ValueError(f'Expected {self.n_samples} response rows, got {results.shape[0]}')
-
-    def split_outputs(self, outputs: List[StochasticOutput], method_result=None) -> StochasticResult:
-        return StochasticResult(outputs[:self.n_obj], outputs[self.n_obj:self.n_obj + self.n_ieq_constr],
-                                outputs[ self.n_obj + self.n_ieq_constr: self.n_obj + self.n_ieq_constr + self.n_eq_constr], method_result)
-
 
 class MonteCarlo(UQMethod):
     """
@@ -261,11 +240,10 @@ class MonteCarlo(UQMethod):
     """
 
     def process_results(self, results: np.ndarray) -> StochasticResult:
-        self.check_results(results)
         sample = ot.Sample(np.asarray(results, dtype=float))
-        outputs = [StochasticOutput.from_results(sample, i, self.measures[i])
-                   for i in range(len(self.measures))]
-        return self.split_outputs(outputs)
+        outputs = [StochasticOutput.from_results(sample, i)
+                   for i in range(results.shape[1])]
+        return StochasticResult(outputs)
 
 
 class PolynomialChaos(UQMethod):
@@ -285,30 +263,22 @@ class PolynomialChaos(UQMethod):
     samples, so the problem's `nan_policy` decides what happens to that design point as usual.
     """
 
-    def __init__(self, n: int, seed: int = None, degree: int = 3, n_metamodel_samples: int = 10000):
+    def __init__(self, n_evaluations: int, seed: int = None, degree: int = 3, n_metamodel_samples: int = 10000):
         self.degree = degree
         self.n_metamodel_samples = n_metamodel_samples
         self._metamodel_input: Optional[ot.Sample] = None
-        super().__init__(n, seed)
-
-    def _validate(self):
-        # Needs the bound parameter space, since the number of terms depends on the number of parameters
-        n_terms = self.n_terms
-        if self.n < n_terms:
-            raise ValueError(f'A degree-{self.degree} expansion in {self.parameters_space.n_parameters} '
-                             f'parameters has {n_terms} terms, so it needs at least that many samples to fit: '
-                             f'n = {self.n}')
+        super().__init__(n_evaluations, seed)
 
     @property
-    def n_terms(self) -> int:
+    def n_terms(self, parameters_space: StochasticParameterSpace) -> int:
         """Number of terms in the expansion, i.e. the minimum number of samples needed to fit it"""
-        enumerate_function = ot.LinearEnumerateFunction(self.parameters_space.n_parameters)
+        enumerate_function = ot.LinearEnumerateFunction(parameters_space.n_parameters)
         return int(enumerate_function.getStrataCumulatedCardinal(self.degree))
 
     def draw_samples(self) -> np.ndarray:
         # A Latin hypercube covers the parameter space more evenly than plain Monte Carlo, which matters when the
         # design is used to fit an expansion rather than to average over
-        experiment = ot.LHSExperiment(self.parameters_space.joint_dist, self.n, False, True)
+        experiment = ot.LHSExperiment(self.parameters_space.joint_dist, self.n_evaluations, False, True)
         samples = experiment.generate()
         self.parameters_space.sample = samples
         return np.array(samples)
@@ -333,7 +303,7 @@ class PolynomialChaos(UQMethod):
                                            adaptive_strategy, projection_strategy)
 
     def process_results(self, results: np.ndarray) -> StochasticResult:
-        self.check_results(results)
+
         results = np.asarray(results, dtype=float)
 
         input_sample = ot.Sample(self.get_samples())
@@ -356,6 +326,6 @@ class PolynomialChaos(UQMethod):
                 chaos_results.append(chaos_result)
                 samples = chaos_result.getMetaModel()(metamodel_input)
 
-            outputs.append(StochasticOutput(samples, self.measures[i_out]))
+            outputs.append(StochasticOutput(samples))
 
-        return self.split_outputs(outputs, method_result=chaos_results)
+        return StochasticResult(outputs, method_result=chaos_results)

@@ -48,7 +48,6 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             raise ValueError(f'uq_method should be a UQMethod instance, got: {uq_method!r}')
 
         # Attach the problem structure the method could not know at construction time
-        uq_method.add_config(param_space, self.measures, n_obj, n_ieq_constr, n_eq_constr)
         self.uq_method = uq_method
 
         # Latest per-design-point statistics, also provided in the evaluation output
@@ -84,13 +83,7 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         Do not override this: implement `_arch_evaluate_sample` instead.
         """
 
-        # Correction only runs before _arch_evaluate for explicit design spaces (see ArchOptProblemBase._evaluate),
-        # so for an implicit design space the design vectors still need to be corrected and imputed here: otherwise
-        # the evaluation function would see an all-True activeness matrix and un-imputed design vectors.
-        if not self.design_space.is_explicit():
-            self._correct_x_impute(x, is_active_out)
-
-        u_samples = self.uq_method.get_samples()
+        u_samples = self.uq_method.get_samples(self.param_space)
         n_x, n_s = x.shape[0], u_samples.shape[0]
 
         f_s = np.zeros((n_x, n_s, self.n_obj))*np.nan
@@ -114,12 +107,12 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
             # Each output carries its own measure, so the same call reduces objectives, inequality constraints
             # and equality constraints alike - there is no per-kind parameter list to index into
-            for f_i, output in enumerate(result.f):
-                f_out[x_i, f_i] = output.reduce(nan_policy=nan_policy)
-            for g_i, output in enumerate(result.g):
-                g_out[x_i, g_i] = output.reduce(nan_policy=nan_policy)
-            for h_i, output in enumerate(result.h):
-                h_out[x_i, h_i] = output.reduce(nan_policy=nan_policy)
+            for f_i, output in enumerate(result.outputs[self.n_obj:]):
+                f_out[x_i, f_i] = output.reduce(self.obj_measure[f_i], nan_policy=nan_policy)
+            for g_i, output in enumerate(result.outputs[self.n_obj:self.n_obj+self.n_ieq_constr]):
+                g_out[x_i, g_i] = output.reduce(self.ieq_constr_measure[g_i], nan_policy=nan_policy)
+            for h_i, output in enumerate(result.outputs[self.n_obj+self.n_ieq_constr:]):
+                h_out[x_i, h_i] = output.reduce(self.eq_constr_measure[h_i], nan_policy=nan_policy)
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, *args, sample: np.ndarray, **kwargs):

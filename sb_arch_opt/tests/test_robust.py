@@ -15,7 +15,7 @@ class VectorizedProblem(StochasticArchOptProblem):
         param_space = StochasticParameterSpace()
         param_space.add_parameter(StochasticParameter('u0', ot.Normal(1., .05)))
         super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))], param_space=param_space,
-                         uq_method=uq_method if uq_method is not None else MonteCarlo(n=n, seed=seed),
+                         uq_method=uq_method if uq_method is not None else MonteCarlo(n_evaluations=n, seed=seed),
                          n_obj=1, **kwargs)
 
     def _is_conditionally_active(self):
@@ -36,7 +36,7 @@ class HierarchicalProblem(StochasticArchOptProblem):
         param_space.add_parameter(StochasticParameter('payload', ot.Normal(2., .3)))
         param_space.add_parameter(StochasticParameter('bsfc', ot.Normal(.42, .075)))
         super().__init__([Choice(options=['electric', 'hybrid']), Real(bounds=(.2, 1.)), Real(bounds=(.1, .4))],
-                         param_space=param_space, uq_method=MonteCarlo(n=n, seed=seed),
+                         param_space=param_space, uq_method=MonteCarlo(n_evaluations=n, seed=seed),
                          n_obj=1, n_ieq_constr=1, **kwargs)
 
     def _is_conditionally_active(self):
@@ -132,18 +132,18 @@ def test_reduce_rejects_unknown_nan_policy():
 
 
 def test_uq_method_checks_measure_count_on_bind():
-    method = MonteCarlo(n=10)
+    method = MonteCarlo(n_evaluations=10)
     with pytest.raises(ValueError):
         method.add_config(_space(), [Mean()], n_obj=1, n_ieq_constr=1, n_eq_constr=0)
 
 
 def test_uq_method_must_be_bound_before_use():
     with pytest.raises(RuntimeError):
-        MonteCarlo(n=10).get_samples()
+        MonteCarlo(n_evaluations=10).get_samples()
 
 
 def test_process_results_splits_columns():
-    method = MonteCarlo(n=3)
+    method = MonteCarlo(n_evaluations=3)
     method.add_config(_space(), [Mean()]*3, n_obj=1, n_ieq_constr=2, n_eq_constr=0)
 
     result = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]))
@@ -240,7 +240,7 @@ class AllResponseKindsProblem(StochasticArchOptProblem):
         kwargs.setdefault('ieq_constr_measure', [Mean()])
         kwargs.setdefault('eq_constr_measure', [Margin(k=3.)])
         super().__init__([Real(bounds=(0., 1.))], param_space=param_space,
-                         uq_method=MonteCarlo(n=200, seed=5),
+                         uq_method=MonteCarlo(n_evaluations=200, seed=5),
                          n_obj=1, n_ieq_constr=1, n_eq_constr=1, **kwargs)
 
     def _is_conditionally_active(self):
@@ -332,13 +332,13 @@ def test_nan_policy_omit_reduces_over_surviving_samples():
 def test_requires_parameter_space():
     with pytest.raises(ValueError):
         StochasticArchOptProblem([Real(bounds=(0., 1.))], param_space=StochasticParameterSpace(),
-                                 uq_method=MonteCarlo(n=10), n_obj=1)
+                                 uq_method=MonteCarlo(n_evaluations=10), n_obj=1)
 
 
 def test_obj_measure_count_checked():
     with pytest.raises(ValueError):
         StochasticArchOptProblem([Real(bounds=(0., 1.))], param_space=_space(),
-                                 uq_method=MonteCarlo(n=10), n_obj=1,
+                                 uq_method=MonteCarlo(n_evaluations=10), n_obj=1,
                                  obj_measure=[Mean(), Mean()])
 
 
@@ -410,7 +410,7 @@ def test_pce_n_terms():
     space = StochasticParameterSpace()
     for name in ['a', 'b', 'c']:
         space.add_parameter(StochasticParameter(name, ot.Normal(0., 1.)))
-    method = PolynomialChaos(n=200, degree=8)
+    method = PolynomialChaos(n_evaluations=200, degree=8)
     method.add_config(_space(3), [Mean()], n_obj=1, n_ieq_constr=0, n_eq_constr=0)
     assert method.n_terms == 165  # degree 8 in 3 dimensions
 
