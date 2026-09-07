@@ -31,6 +31,13 @@ class StochasticRosenbrock(StochasticArchOptProblem):
 
     Note that only `_arch_evaluate_sample` is implemented, and that it is vectorized over all design points: the
     loop over uncertain-parameter samples is owned by `StochasticArchOptProblem`.
+
+    A UQ method is constructed over a parameter space, so passing your own means building the space first:
+
+    ```python
+    param_space = StochasticRosenbrock.get_parameter_space(n_var=2)
+    problem = StochasticRosenbrock(uq_method=PolynomialChaos(param_space, n_evaluations=40, degree=3))
+    ```
     """
 
     def __init__(self, n_var=2, mean=1., std=.05, n=100, seed=42,
@@ -41,16 +48,26 @@ class StochasticRosenbrock(StochasticArchOptProblem):
         self.std = std
         self._n_param = n_var - 1
 
-        param_space = StochasticParameterSpace()
-        for i in range(self._n_param):
-            param_space.add_parameter(StochasticParameter(f'u{i}', ot.Normal(mean, std)))
+        # The problem and its UQ method must be defined over the same parameter space; when a method is supplied
+        # it already carries the space it was built over, so take that one rather than building a second
+        if uq_method is None:
+            param_space = self.get_parameter_space(n_var, mean=mean, std=std)
+            uq_method = MonteCarlo(param_space, n_evaluations=n, seed=seed)
 
         super().__init__(
             [Real(bounds=(-2.048, 2.048)) for _ in range(n_var)],
-            param_space=param_space,
-            uq_method=uq_method if uq_method is not None else MonteCarlo(n_evaluations=n, seed=seed),
+            uq_method=uq_method,
             n_obj=1, obj_measure=obj_measure,
         )
+
+    @staticmethod
+    def get_parameter_space(n_var=2, mean=1., std=.05) -> StochasticParameterSpace:
+        """The uncertain valley location: one parameter per Rosenbrock term. Build this first if you want to
+        construct the UQ method yourself, since a method is defined over a parameter space."""
+        param_space = StochasticParameterSpace()
+        for i in range(n_var-1):
+            param_space.add_parameter(InputParameter(f'u{i}', ot.Normal(mean, std)))
+        return param_space
 
     def _is_conditionally_active(self) -> List[bool]:
         return [False]*self.n_var
@@ -64,10 +81,10 @@ class StochasticRosenbrock(StochasticArchOptProblem):
     def might_have_hidden_constraints(self):
         return False
 
-    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, *args, sample, **kwargs):
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
         f = np.zeros((x.shape[0],))
         for i in range(self._n_param):
-            f += 100*(x[:, i+1] - x[:, i]**2)**2 + (sample[i] - x[:, i])**2
+            f += 100 * (x[:, i+1] - x[:, i]**2) ** 2 + (parameters[i] - x[:, i]) ** 2
         f_out[:, 0] = f
 
     def _calc_pareto_front(self, *args, **kwargs):

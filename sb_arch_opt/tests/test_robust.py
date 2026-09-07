@@ -12,11 +12,19 @@ class VectorizedProblem(StochasticArchOptProblem):
     """Only implements _arch_evaluate_sample, vectorized over all design points"""
 
     def __init__(self, n=100, seed=42, uq_method=None, **kwargs):
+        # A supplied method already carries the space it was built over; the problem must use that same one
+        if uq_method is None:
+            param_space = self.get_parameter_space()
+            uq_method = MonteCarlo(param_space, n_evaluations=n, seed=seed)
+
+        super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))],
+                         uq_method=uq_method, n_obj=1, **kwargs)
+
+    @staticmethod
+    def get_parameter_space():
         param_space = StochasticParameterSpace()
-        param_space.add_parameter(StochasticParameter('u0', ot.Normal(1., .05)))
-        super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))], param_space=param_space,
-                         uq_method=uq_method if uq_method is not None else MonteCarlo(n_evaluations=n, seed=seed),
-                         n_obj=1, **kwargs)
+        param_space.add_parameter(InputParameter('u0', ot.Normal(1., .05)))
+        return param_space
 
     def _is_conditionally_active(self):
         return [False, False]
@@ -24,8 +32,8 @@ class VectorizedProblem(StochasticArchOptProblem):
     def _correct_x(self, x, is_active):
         pass
 
-    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, *args, sample, **kwargs):
-        f_out[:, 0] = (sample[0] - x[:, 0])**2 + x[:, 1]**2
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
+        f_out[:, 0] = (parameters[0] - x[:, 0]) ** 2 + x[:, 1] ** 2
 
 
 class HierarchicalProblem(StochasticArchOptProblem):
@@ -33,10 +41,10 @@ class HierarchicalProblem(StochasticArchOptProblem):
 
     def __init__(self, n=50, seed=1, **kwargs):
         param_space = StochasticParameterSpace()
-        param_space.add_parameter(StochasticParameter('payload', ot.Normal(2., .3)))
-        param_space.add_parameter(StochasticParameter('bsfc', ot.Normal(.42, .075)))
+        param_space.add_parameter(InputParameter('payload', ot.Normal(2., .3)))
+        param_space.add_parameter(InputParameter('bsfc', ot.Normal(.42, .075)))
         super().__init__([Choice(options=['electric', 'hybrid']), Real(bounds=(.2, 1.)), Real(bounds=(.1, .4))],
-                         param_space=param_space, uq_method=MonteCarlo(n_evaluations=n, seed=seed),
+                         uq_method=MonteCarlo(param_space, n_evaluations=n, seed=seed),
                          n_obj=1, n_ieq_constr=1, **kwargs)
 
     def _is_conditionally_active(self):
@@ -45,8 +53,8 @@ class HierarchicalProblem(StochasticArchOptProblem):
     def _correct_x(self, x, is_active):
         is_active[:, 2] = x[:, 0] == 1  # fuel fraction only active for the hybrid branch
 
-    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, *args, sample, **kwargs):
-        payload, bsfc = sample
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
+        payload, bsfc = parameters
         for i in range(x.shape[0]):  # per-row pattern, as used by several problems in the repo
             mass = .5 + x[i, 1] + payload
             energy = x[i, 2]*130./(bsfc+.1) if x[i, 0] == 1 else x[i, 1]*40.
@@ -58,21 +66,21 @@ class HierarchicalProblem(StochasticArchOptProblem):
 
 
 def test_parameter_mean_and_std():
-    param = StochasticParameter('u', ot.Normal(5., .3))
+    param = InputParameter('u', ot.Normal(5., .3))
     assert param.mean() == pytest.approx(5.)
     assert param.std() == pytest.approx(.3)  # not the mean: getParameter()[0] would give 5.
 
 
 def test_parameter_space_joint_dist():
     space = StochasticParameterSpace()
-    space.add_parameter(StochasticParameter('a', ot.Normal(0., 1.)))
-    space.add_parameter(StochasticParameter('b', ot.Uniform(0., 1.)))
+    space.add_parameter(InputParameter('a', ot.Normal(0., 1.)))
+    space.add_parameter(InputParameter('b', ot.Uniform(0., 1.)))
 
     assert space.n_parameters == 2
     assert space.parameter_names == ['a', 'b']
     assert space.joint_dist.getDimension() == 2
 
-    samples = space.get_samples(20)
+    samples = space.get_random_samples(20)
     assert samples.shape == (20, 2)
 
 
@@ -86,7 +94,7 @@ def _output(values):
 def _space(n=1):
     space = StochasticParameterSpace()
     for i in range(n):
-        space.add_parameter(StochasticParameter(f'u{i}', ot.Normal(0., 1.)))
+        space.add_parameter(InputParameter(f'u{i}', ot.Normal(0., 1.)))
     return space
 
 
@@ -134,21 +142,33 @@ def test_reduce_rejects_unknown_nan_policy():
 """### UQ methods ###"""
 
 
-def test_uq_method_takes_the_parameter_space_as_a_call_parameter():
-    """A method carries no problem-specific state: the space it samples is passed in, not bound at construction"""
-    method = MonteCarlo(n_evaluations=10)
-    assert method.get_samples(_space(2)).shape == (10, 2)
+def test_uq_method_is_constructed_over_a_parameter_space():
+    """A method is defined by what it propagates: the space is bound at construction, not passed per call"""
+    space = _space(2)
+    method = MonteCarlo(space, n_evaluations=10)
+
+    assert method.param_space is space
+    assert method.n_samples == 10
+    assert method.get_samples().shape == (10, 2)
 
 
-def test_uq_method_needs_a_parameter_space_to_sample():
-    with pytest.raises(ValueError):
-        MonteCarlo(n_evaluations=10).get_samples(None)
+def test_uq_method_needs_a_parameter_space():
+    with pytest.raises(ValueError, match='parameter space'):
+        MonteCarlo(None, n_evaluations=10)
+
+    with pytest.raises(ValueError, match='parameter space'):
+        MonteCarlo(StochasticParameterSpace(), n_evaluations=10)
+
+
+def test_uq_method_needs_a_number_of_evaluations():
+    with pytest.raises(ValueError, match='n_evaluations'):
+        MonteCarlo(_space(), n_evaluations=None)
 
 
 def test_process_results_gives_one_output_per_column():
-    method = MonteCarlo(n_evaluations=3)
+    method = MonteCarlo(_space(), n_evaluations=3)
 
-    result = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]), _space())
+    result = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]))
     assert len(result.outputs) == 3
     assert result.outputs[0].mean() == pytest.approx(2.)
     assert result.outputs[1].mean() == pytest.approx(11.)
@@ -156,9 +176,9 @@ def test_process_results_gives_one_output_per_column():
 
 
 def test_process_results_checks_the_number_of_sample_rows():
-    method = MonteCarlo(n_evaluations=3)
+    method = MonteCarlo(_space(), n_evaluations=3)
     with pytest.raises(ValueError):
-        method.process_results(np.array([[1.], [2.]]), _space())
+        method.process_results(np.array([[1.], [2.]]))
 
 
 """### The evaluation loop ###"""
@@ -241,12 +261,12 @@ class AllResponseKindsProblem(StochasticArchOptProblem):
 
     def __init__(self, **kwargs):
         param_space = StochasticParameterSpace()
-        param_space.add_parameter(StochasticParameter('u', ot.Normal(1., .2)))
+        param_space.add_parameter(InputParameter('u', ot.Normal(1., .2)))
         kwargs.setdefault('obj_measure', [Mean()])
         kwargs.setdefault('ieq_constr_measure', [Mean()])
         kwargs.setdefault('eq_constr_measure', [Margin(k=3.)])
-        super().__init__([Real(bounds=(0., 1.))], param_space=param_space,
-                         uq_method=MonteCarlo(n_evaluations=200, seed=5),
+        super().__init__([Real(bounds=(0., 1.))],
+                         uq_method=MonteCarlo(param_space, n_evaluations=200, seed=5),
                          n_obj=1, n_ieq_constr=1, n_eq_constr=1, **kwargs)
 
     def _is_conditionally_active(self):
@@ -255,10 +275,10 @@ class AllResponseKindsProblem(StochasticArchOptProblem):
     def _correct_x(self, x, is_active):
         pass
 
-    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, *args, sample, **kwargs):
-        f_out[:, 0] = sample[0] + x[:, 0]
-        g_out[:, 0] = sample[0] - x[:, 0]
-        h_out[:, 0] = sample[0] * x[:, 0]
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
+        f_out[:, 0] = parameters[0] + x[:, 0]
+        g_out[:, 0] = parameters[0] - x[:, 0]
+        h_out[:, 0] = parameters[0] * x[:, 0]
 
 
 def test_equality_constraints_use_their_own_measure():
@@ -290,7 +310,7 @@ def test_statistics_available_per_design_point():
 
     assert len(out['stochastic']) == 2
     for result in out['stochastic']:
-        assert isinstance(result, StochasticResult)
+        assert isinstance(result, StochasticResults)
         assert len(result.outputs) == 1
         assert len(result.outputs[0].to_numpy()) == 100
 
@@ -310,9 +330,9 @@ def test_reported_statistics_reproduce_the_reduced_value():
 
 
 class FailingProblem(VectorizedProblem):
-    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, *args, sample, **kwargs):
-        f_out[:, 0] = x[:, 0] + sample[0]
-        if sample[0] > 1.02:  # some samples fail to evaluate
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
+        f_out[:, 0] = x[:, 0] + parameters[0]
+        if parameters[0] > 1.02:  # some samples fail to evaluate
             f_out[:, 0] = np.nan
 
 
@@ -337,16 +357,11 @@ def test_nan_policy_omit_reduces_over_surviving_samples():
 """### Configuration checks ###"""
 
 
-def test_requires_parameter_space():
-    with pytest.raises(ValueError):
-        StochasticArchOptProblem([Real(bounds=(0., 1.))], param_space=StochasticParameterSpace(),
-                                 uq_method=MonteCarlo(n_evaluations=10), n_obj=1)
-
-
 def test_obj_measure_count_checked():
+    space = _space()
     with pytest.raises(ValueError):
-        StochasticArchOptProblem([Real(bounds=(0., 1.))], param_space=_space(),
-                                 uq_method=MonteCarlo(n_evaluations=10), n_obj=1,
+        StochasticArchOptProblem([Real(bounds=(0., 1.))],
+                                 uq_method=MonteCarlo(space, n_evaluations=10), n_obj=1,
                                  obj_measure=[Mean(), Mean()])
 
 
@@ -366,11 +381,11 @@ def test_measures_must_be_robust_measure_instances():
 
 def test_uq_method_required():
     with pytest.raises(ValueError):
-        StochasticArchOptProblem([Real(bounds=(0., 1.))], param_space=_space(),
+        StochasticArchOptProblem([Real(bounds=(0., 1.))],
                                  uq_method=None, n_obj=1)
 
     with pytest.raises(ValueError):
-        StochasticArchOptProblem([Real(bounds=(0., 1.))], param_space=_space(),
+        StochasticArchOptProblem([Real(bounds=(0., 1.))],
                                  uq_method='monte carlo', n_obj=1)
 
 
@@ -383,10 +398,11 @@ class QuadraticProblem(StochasticArchOptProblem):
 
     def __init__(self, uq_method_class=MonteCarlo, n=50, fail=False, method_kwargs=None, **kwargs):
         param_space = StochasticParameterSpace()
-        param_space.add_parameter(StochasticParameter('u', ot.Normal(1., .05)))
+        param_space.add_parameter(InputParameter('u', ot.Normal(1., .05)))
         self.fail = fail
-        super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))], param_space=param_space,
-                         uq_method=uq_method_class(n_evaluations=n, seed=42, **(method_kwargs or {})),
+        super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))],
+                         uq_method=uq_method_class(param_space, n_evaluations=n, seed=42,
+                                                   **(method_kwargs or {})),
                          n_obj=1, obj_measure=[Mean()], **kwargs)
 
     def _is_conditionally_active(self):
@@ -395,9 +411,9 @@ class QuadraticProblem(StochasticArchOptProblem):
     def _correct_x(self, x, is_active):
         pass
 
-    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, *args, sample, **kwargs):
-        f_out[:, 0] = (sample[0] - x[:, 0])**2 + x[:, 1]**2
-        if self.fail and sample[0] > 1.02:
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
+        f_out[:, 0] = (parameters[0] - x[:, 0]) ** 2 + x[:, 1] ** 2
+        if self.fail and parameters[0] > 1.02:
             f_out[:, 0] = np.nan
 
 
@@ -415,23 +431,22 @@ def test_pce_kwargs_are_passed_through():
 
 
 def test_pce_n_terms():
-    """The number of terms depends on the parameter space, which is a call parameter rather than stored state"""
-    method = PolynomialChaos(n_evaluations=200, degree=8)
-    assert method.n_terms(_space(3)) == 165  # degree 8 in 3 dimensions
-    assert method.n_terms(_space(1)) == 9  # degree 8 in 1 dimension
+    """The number of terms follows from the degree and the parameter space the method was built over"""
+    assert PolynomialChaos(_space(3), n_evaluations=200, degree=8).n_terms == 165  # degree 8 in 3 dimensions
+    assert PolynomialChaos(_space(1), n_evaluations=200, degree=8).n_terms == 9  # degree 8 in 1 dimension
 
 
 def test_pce_needs_enough_samples_to_fit_the_expansion():
-    """A degree-8 expansion in 3 parameters has 165 terms, so 10 samples cannot fit it"""
-    method = PolynomialChaos(n_evaluations=10, degree=8)
-    with pytest.raises(ValueError):
-        method.get_samples(_space(3))
+    """A degree-8 expansion in 3 parameters has 165 terms, so 10 samples cannot fit it. Both the degree and the
+    space are known at construction, so this fails there rather than at the first evaluation"""
+    with pytest.raises(ValueError, match='165 terms'):
+        PolynomialChaos(_space(3), n_evaluations=10, degree=8)
 
 
 def test_pce_draws_a_latin_hypercube():
     """PCE fits an expansion rather than averaging, so it uses an LHS design instead of plain Monte Carlo"""
     space = _space(2)
-    samples = PolynomialChaos(n_evaluations=40, seed=42).get_samples(space)
+    samples = PolynomialChaos(space, n_evaluations=40, seed=42).get_samples()
     assert samples.shape == (40, 2)
 
     # An LHS puts exactly one point in each of the n equiprobable strata of every marginal
@@ -490,7 +505,7 @@ def test_pce_falls_back_to_raw_samples_when_evaluations_fail():
 
 def test_pce_uses_all_samples_it_asked_for():
     problem = QuadraticProblem(PolynomialChaos, n=40)
-    assert problem.uq_method.get_samples(problem.param_space).shape == (40, 1)
+    assert problem.uq_method.get_samples().shape == (40, 1)
 
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
     # statistics come from the cheap metamodel, not from the 40 expensive evaluations
@@ -512,3 +527,19 @@ def test_stochastic_rosenbrock():
     # Moving away from the optimum makes it worse
     f_off = problem.evaluate(np.array([[.5, .5, .5]]), return_as_dictionary=True)['F']
     assert f_off[0, 0] > out['F'][0, 0]
+
+def test_samples_are_drawn_once_and_reused():
+    """Common random numbers: every design point sees the same realizations"""
+    method = MonteCarlo(_space(), n_evaluations=20, seed=42)
+    assert np.all(method.get_samples() == method.get_samples())
+
+
+    # The same space is of course fine
+    StochasticArchOptProblem([Real(bounds=(0., 1.))],
+                             uq_method=MonteCarlo(_space(), n_evaluations=10), n_obj=1)
+
+
+def test_problem_exposes_the_bound_parameter_space():
+    problem = VectorizedProblem(n=10)
+    assert problem.uq_method.param_space is problem.param_space
+    assert problem.param_space.parameter_names == ['u0']
