@@ -75,8 +75,8 @@ class InputParameter:
     def __init__(self, name, value: Union[ot.DistributionImplementation, float]):
         self.name = name
 
-        if isinstance(value, float):
-            value = ot.Dirac(value)
+        if not isinstance(value, (ot.DistributionImplementation, ot.Distribution)):
+            value = ot.Dirac(float(value))
         self.distribution = value
 
     def mean(self) -> float:
@@ -262,7 +262,6 @@ class MonteCarlo(UQMethod):
     def _draw_samples(self) -> np.ndarray:
         # Draw samples with LHS method
         samples = self.param_space.get_lhs_samples(self.n_evaluations)
-        self._samples = samples
         return samples
 
     def process_results(self, results: np.ndarray) -> StochasticResults:
@@ -293,7 +292,6 @@ class PolynomialChaos(UQMethod):
     """
 
     def __init__(self, param_space: StochasticParameterSpace, n_evaluations: int, seed: int = None, degree: int = 3, n_metamodel_samples: int = 10000):
-        self.param_space = param_space
         self.degree = degree
         self.n_metamodel_samples = n_metamodel_samples
         self._metamodel_input: Optional[ot.Sample] = None
@@ -319,7 +317,6 @@ class PolynomialChaos(UQMethod):
         self._validate()
         # Draw samples with LHS method
         samples = self.param_space.get_lhs_samples(self.n_evaluations)
-        self._samples = samples
         return samples
 
     def _get_metamodel_input(self) -> ot.Sample:

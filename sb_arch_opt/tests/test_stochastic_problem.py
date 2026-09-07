@@ -3,7 +3,7 @@ import numpy as np
 import openturns as ot
 from pymoo.core.variable import Real, Choice
 
-from sb_arch_opt.robust import StochasticArchOptProblem
+from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
 from sb_arch_opt.uncertainty import *
 from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenbrock
 
@@ -71,6 +71,29 @@ def test_parameter_mean_and_std():
     assert param.std() == pytest.approx(.3)  # not the mean: getParameter()[0] would give 5.
 
 
+@pytest.mark.parametrize('value', [1.225, 5, np.float64(2.5)])
+def test_deterministic_parameter_becomes_a_dirac(value):
+    """A deterministic parameter keeps its column in the realization matrix, with zero variance. Note an int is
+    accepted too: it is the most natural way to write a constant, and `isinstance(value, float)` would miss it"""
+    param = InputParameter('rho', value)
+
+    assert isinstance(param.distribution, ot.DistributionImplementation)
+    assert param.mean() == pytest.approx(float(value))
+    assert param.std() == pytest.approx(0.)
+
+
+def test_deterministic_parameter_joins_the_joint_distribution():
+    """The whole point of the Dirac: a constant parameter has to survive alongside uncertain ones"""
+    space = StochasticParameterSpace()
+    space.add_parameter(InputParameter('u', ot.Normal(0., 1.)))
+    space.add_parameter(InputParameter('rho', 1.225))
+
+    samples = space.get_random_samples(20)
+    assert samples.shape == (20, 2)
+    assert np.all(samples[:, 1] == 1.225)
+    assert samples[:, 0].std() > 0.
+
+
 def test_parameter_space_joint_dist():
     space = StochasticParameterSpace()
     space.add_parameter(InputParameter('a', ot.Normal(0., 1.)))
@@ -82,6 +105,25 @@ def test_parameter_space_joint_dist():
 
     samples = space.get_random_samples(20)
     assert samples.shape == (20, 2)
+
+
+def test_parameter_space_lhs_samples_are_stratified():
+    """An LHS puts exactly one point in each of the n equiprobable strata of every marginal; a random design
+    does not, which is what distinguishes the two draws the space offers"""
+    space = _space(2)
+
+    lhs, random = space.get_lhs_samples(40), space.get_random_samples(40)
+    assert lhs.shape == random.shape == (40, 2)
+
+    assert all(_n_occupied_strata(space, lhs, i) == 40 for i in range(2))
+    assert any(_n_occupied_strata(space, random, i) < 40 for i in range(2))
+
+
+def _n_occupied_strata(space, samples, i_param):
+    """How many of the n equiprobable strata of marginal `i_param` contain at least one sample"""
+    n = samples.shape[0]
+    cdf = np.array([space.parameters[i_param].distribution.computeCDF(v) for v in samples[:, i_param]])
+    return len(np.unique(np.floor(cdf*n).astype(int)))
 
 
 """### Reduction ###"""
@@ -116,6 +158,26 @@ def test_measure_parameters_validated_at_construction():
     """A bad configuration should fail when the problem is built, not on the first evaluation"""
     with pytest.raises(ValueError):
         Quantile(q=2.)
+
+
+def test_margin_direction_follows_the_optimization_direction():
+    """The margin is the conservative value, so which tail that is depends on the direction: for a minimized
+    response it is mean + k*std, for a maximized one mean - k*std"""
+    out = _output([1., 2., 3., 4., 5.])
+    mean, std = out.mean(), out.std()
+
+    assert out.reduce(Margin(k=2.)) == pytest.approx(mean + 2.*std)  # minimization is the default
+    assert out.reduce(Margin(k=2., direction=-1)) == pytest.approx(mean + 2.*std)
+    assert out.reduce(Margin(k=2., direction=1)) == pytest.approx(mean - 2.*std)
+
+
+def test_margin_penalizes_spread_in_both_directions():
+    """Same mean, less scatter -> a better value whichever way the response is optimized"""
+    wide, narrow = _output([1., 3., 5.]), _output([2.5, 3., 3.5])
+    assert wide.mean() == pytest.approx(narrow.mean())
+
+    assert narrow.reduce(Margin(k=2.)) < wide.reduce(Margin(k=2.))  # minimized: lower is better
+    assert narrow.reduce(Margin(k=2., direction=1)) > wide.reduce(Margin(k=2., direction=1))  # maximized
 
 
 def test_measures_carry_their_own_parameters():
@@ -165,6 +227,17 @@ def test_uq_method_needs_a_number_of_evaluations():
         MonteCarlo(_space(), n_evaluations=None)
 
 
+@pytest.mark.parametrize('method_class', [MonteCarlo, PolynomialChaos])
+def test_uq_methods_draw_a_latin_hypercube(method_class):
+    """Both methods use an LHS rather than a plain random draw: it covers the parameter space more evenly for the
+    same number of expensive evaluations, which matters both for averaging over and for fitting an expansion"""
+    space = _space(2)
+    samples = method_class(space, n_evaluations=40, seed=42).get_samples()
+
+    assert samples.shape == (40, 2)
+    assert all(_n_occupied_strata(space, samples, i) == 40 for i in range(2))
+
+
 def test_process_results_gives_one_output_per_column():
     method = MonteCarlo(_space(), n_evaluations=3)
 
@@ -194,6 +267,24 @@ def test_user_only_implements_arch_evaluate_sample():
     # E[(u-x)^2] + x1^2 = (E[u]-x0)^2 + var + x1^2
     assert out['F'][0, 0] == pytest.approx(.05**2, abs=2e-3)
     assert out['F'][1, 0] == pytest.approx(1. + .05**2, abs=2e-2)
+
+
+def test_evaluate_sample_receives_one_realization_per_sample():
+    """The hook is called once per row of the method's design, and gets that row - not an index into it"""
+    problem = VectorizedProblem(n=25)
+    seen = []
+
+    original = problem._arch_evaluate_sample
+
+    def _recording(x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
+        seen.append(np.asarray(parameters).copy())
+        return original(x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs)
+
+    problem._arch_evaluate_sample = _recording
+    problem.evaluate(np.array([[1., 0.], [0., 0.]]), return_as_dictionary=True)
+
+    assert len(seen) == 25  # once per sample, not once per design point
+    assert np.allclose(np.array(seen), problem.uq_method.get_samples())
 
 
 def test_multiple_design_points_at_once():
@@ -443,21 +534,12 @@ def test_pce_needs_enough_samples_to_fit_the_expansion():
         PolynomialChaos(_space(3), n_evaluations=10, degree=8)
 
 
-def test_pce_draws_a_latin_hypercube():
-    """PCE fits an expansion rather than averaging, so it uses an LHS design instead of plain Monte Carlo"""
-    space = _space(2)
-    samples = PolynomialChaos(space, n_evaluations=40, seed=42).get_samples()
-    assert samples.shape == (40, 2)
-
-    # An LHS puts exactly one point in each of the n equiprobable strata of every marginal
-    for i_param in range(2):
-        cdf = np.array([space.parameters[i_param].distribution.computeCDF(v) for v in samples[:, i_param]])
-        assert len(np.unique(np.floor(cdf*40).astype(int))) == 40
 
 
 
 def test_pce_is_more_accurate_than_monte_carlo():
-    """The point of PCE: far better statistics for the same number of expensive evaluations."""
+    """The point of PCE: far better statistics for the same number of expensive evaluations. Both methods draw
+    the same kind of LHS design, so what is compared here is fitting an expansion against averaging over it."""
     x = np.array([[1., 0.]])
     exact = .05**2  # E[(u-x)^2] at x = E[u] is Var[u]
 
@@ -534,12 +616,23 @@ def test_samples_are_drawn_once_and_reused():
     assert np.all(method.get_samples() == method.get_samples())
 
 
-    # The same space is of course fine
-    StochasticArchOptProblem([Real(bounds=(0., 1.))],
-                             uq_method=MonteCarlo(_space(), n_evaluations=10), n_obj=1)
-
-
 def test_problem_exposes_the_bound_parameter_space():
+    """The problem has no parameter space of its own: it reads the one its method propagates, so the two cannot
+    disagree"""
     problem = VectorizedProblem(n=10)
+
     assert problem.uq_method.param_space is problem.param_space
     assert problem.param_space.parameter_names == ['u0']
+
+    with pytest.raises(AttributeError):
+        problem.param_space = _space()
+
+
+def test_problem_rejects_a_method_without_parameters():
+    """UQMethod already refuses an empty space at construction, so this only bites when one is swapped in
+    afterwards - but that is exactly when it would otherwise fail deep inside the first evaluation"""
+    method = MonteCarlo(_space(), n_evaluations=10)
+    method.param_space = StochasticParameterSpace()
+
+    with pytest.raises(ValueError, match='parameter space'):
+        StochasticArchOptProblem([Real(bounds=(0., 1.))], uq_method=method, n_obj=1)

@@ -12,7 +12,7 @@ import numpy as np
 import openturns as ot
 from pymoo.core.variable import Real
 
-from sb_arch_opt.robust import StochasticArchOptProblem
+from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
 from sb_arch_opt.uncertainty import *
 
 __all__ = ['StochasticRosenbrock']

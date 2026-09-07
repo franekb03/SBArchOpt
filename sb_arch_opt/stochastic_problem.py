@@ -144,4 +144,5 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         - h (equality constraints): written as "= 0"
         - sample: realization of single sample
         """
+
         raise NotImplementedError
