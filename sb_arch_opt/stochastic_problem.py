@@ -106,8 +106,9 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         if not self.design_space.is_explicit():
             self._correct_x_impute(x, is_active_out)
 
-        # Get samples
+        # Get samples and include deterministic parameter values for evaluation
         samples = self.uq_method.get_samples()
+        parameter_values = self.uq_method.param_space.include_deterministic_values(samples)
 
         n_x, n_s = x.shape[0], samples.shape[0]
 
@@ -117,10 +118,8 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         # Evaluate all design vectors for each realization of the uncertain parameters
         for i in range(n_s):
-            # Include deterministic parameter values for evaluation
-            parameter_values = self.uq_method.param_space.include_deterministic_values(samples)
             self._arch_evaluate_sample(
-                x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], parameter_values,*args, **kwargs)
+                x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], parameter_values[i, :],*args, **kwargs)
 
         # Evaluate the stochastic result for all the evaluated design vectors and samples
         nan_policy = self.nan_policy

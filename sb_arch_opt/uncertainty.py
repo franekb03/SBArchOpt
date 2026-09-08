@@ -96,8 +96,8 @@ class StochasticParameterSpace:
     def __init__(self):
         self._sample = None
         self.parameters: List[InputParameter] = []
-        self.stochastic_parameters = []
-        self.deterministic_parameters = []
+        self.stochastic_parameters: List[InputParameter] = []
+        self.deterministic_parameters: List[InputParameter] = []
 
     def add_parameter(self, parameter: InputParameter):
         self.parameters.append(parameter)
@@ -125,12 +125,13 @@ class StochasticParameterSpace:
                                     ot.IndependentCopula(self.n_stochastic_parameters))
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
-        """Draw n samples of all parameters; returns an n x n_parameters matrix"""
+        """ Draw n samples of the stochastic parameters; returns an n x n_stochastic_parameters matrix """
         result = self.joint_dist.getSample(n_samples)
         self._sample = result
         return np.array(result)
 
     def get_lhs_samples(self, n_samples: int) -> np.ndarray:
+        """ Draw n samples of the stochastic parameters; returns an n x n_stochastic_parameters matrix built with LHS"""
         lhs = ot.LHSExperiment(self.joint_dist, n_samples)
         result = lhs.generate()
         self._sample = result
@@ -328,7 +329,7 @@ class PolynomialChaos(UQMethod):
     @property
     def n_terms(self) -> int:
         """Number of terms in the expansion, i.e. the minimum number of samples needed to fit it"""
-        enumerate_function = ot.LinearEnumerateFunction(self.param_space.n_parameters)
+        enumerate_function = ot.LinearEnumerateFunction(self.param_space.n_stochastic_parameters)
         return int(enumerate_function.getStrataCumulatedCardinal(self.degree))
 
     def _validate(self):

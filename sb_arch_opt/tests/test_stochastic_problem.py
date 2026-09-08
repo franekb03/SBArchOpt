@@ -72,28 +72,65 @@ def test_parameter_mean_and_std():
 
 
 @pytest.mark.parametrize('value', [1.225, 5, np.float64(2.5)])
-def test_deterministic_parameter_becomes_a_dirac(value):
-    """A deterministic parameter keeps its column in the realization matrix, with zero variance. Note an int is
-    accepted too: it is the most natural way to write a constant, and `isinstance(value, float)` would miss it"""
+def test_deterministic_parameter_stays_a_plain_value(value):
+    """A deterministic parameter is kept as a number rather than wrapped in a distribution: it has no orthonormal
+    polynomial family to contribute to a chaos basis, so it cannot be a marginal of the joint distribution. Note
+    an int is accepted too - it is the most natural way to write a constant"""
     param = InputParameter('rho', value)
 
-    assert isinstance(param.value, ot.DistributionImplementation)
+    assert isinstance(param.value, float)
     assert param.mean() == pytest.approx(float(value))
     assert param.std() == pytest.approx(0.)
 
 
-def test_deterministic_parameter_joins_the_joint_distribution():
-    """The whole point of the Dirac: a constant parameter has to survive alongside uncertain ones"""
+def test_space_separates_stochastic_from_deterministic_parameters():
+    space = StochasticParameterSpace()
+    u = InputParameter('u', ot.Normal(0., 1.))
+    rho = InputParameter('rho', 1.225)
+    space.add_parameter(u)
+    space.add_parameter(rho)
+
+    assert space.parameters == [u, rho]
+    assert space.stochastic_parameters == [u]
+    assert space.deterministic_parameters == [rho]
+    assert space.n_parameters == 2
+    assert space.n_stochastic_parameters == 1
+
+
+def test_deterministic_parameters_are_reinserted_into_a_realization():
+    """Only the stochastic parameters are drawn; the constants are put back so that a realization covers every
+    parameter of the space and can be indexed by position"""
     space = StochasticParameterSpace()
     space.add_parameter(InputParameter('u', ot.Normal(0., 1.)))
     space.add_parameter(InputParameter('rho', 1.225))
 
     samples = space.get_random_samples(20)
-    samples_with_deterministic = space.include_deterministic_values(samples)
-    assert samples.shape == (20, 1)
-    assert samples_with_deterministic.shape == (20, 2)
-    assert np.all(samples_with_deterministic[:, 1] == 1.225)
+    assert samples.shape == (20, 1)  # the Dirac column is not drawn at all
     assert samples[:, 0].std() > 0.
+
+    extended = space.include_deterministic_values(samples)
+    assert extended.shape == (20, 2)
+    assert np.all(extended[:, 1] == 1.225)
+    assert np.allclose(extended[:, 0], samples[:, 0])
+
+
+def test_deterministic_values_are_reinserted_in_the_right_columns():
+    """The constants can sit anywhere in the space, so the stochastic columns have to be shifted past them"""
+    space = StochasticParameterSpace()
+    space.add_parameter(InputParameter('d0', 1.))
+    space.add_parameter(InputParameter('s0', ot.Normal(10., 1.)))
+    space.add_parameter(InputParameter('d1', 2.))
+    space.add_parameter(InputParameter('s1', ot.Normal(20., 1.)))
+
+    samples = space.get_random_samples(8)
+    assert samples.shape == (8, 2)
+
+    extended = space.include_deterministic_values(samples)
+    assert extended.shape == (8, 4)
+    assert np.all(extended[:, 0] == 1.)
+    assert np.all(extended[:, 2] == 2.)
+    assert np.allclose(extended[:, 1], samples[:, 0])
+    assert np.allclose(extended[:, 3], samples[:, 1])
 
 
 def test_parameter_space_joint_dist():
@@ -290,7 +327,48 @@ def test_evaluate_sample_receives_one_realization_per_sample():
     problem.evaluate(np.array([[1., 0.], [0., 0.]]), return_as_dictionary=True)
 
     assert len(seen) == 25  # once per sample, not once per design point
+    assert all(realization.shape == (1,) for realization in seen)  # one row, not the whole design
+    assert len({tuple(realization) for realization in seen}) == 25  # and a different row each time
     assert np.allclose(np.array(seen), problem.uq_method.get_samples())
+
+
+class MixedParameterProblem(StochasticArchOptProblem):
+    """One stochastic and one deterministic parameter, to pin the shape of a realization"""
+
+    def __init__(self, n=10, **kwargs):
+        space = StochasticParameterSpace()
+        space.add_parameter(InputParameter('u', ot.Normal(1., .05)))
+        space.add_parameter(InputParameter('rho', 1.225))
+        self.seen = []
+        super().__init__([Real(bounds=(-2., 2.))], uq_method=MonteCarlo(space, n_evaluations=n, seed=42),
+                         n_obj=1, **kwargs)
+
+    def _is_conditionally_active(self):
+        return [False]
+
+    def _correct_x(self, x, is_active):
+        pass
+
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
+        self.seen.append(np.asarray(parameters).copy())
+        f_out[:, 0] = parameters[0]*parameters[1] + x[:, 0]
+
+
+def test_evaluate_sample_realization_covers_every_parameter():
+    """Regression: the whole (n_samples x n_parameters) design was handed over on every call instead of one row,
+    so the loop index went unused and every sample evaluated identically"""
+    problem = MixedParameterProblem(n=10)
+    out = problem.evaluate(np.array([[0.]]), return_as_dictionary=True)
+
+    assert len(problem.seen) == 10
+    for realization in problem.seen:
+        assert realization.shape == (2,)  # one value per parameter of the space, deterministic included
+        assert realization[1] == 1.225
+
+    # The stochastic parameter really varies, so the response does too
+    assert len({realization[0] for realization in problem.seen}) == 10
+    assert out['stochastic'][0].outputs[0].std() > 0.
+    assert out['F'][0, 0] == pytest.approx(1.*1.225, abs=.05)
 
 
 def test_multiple_design_points_at_once():
@@ -589,6 +667,88 @@ def test_pce_falls_back_to_raw_samples_when_evaluations_fail():
     problem = QuadraticProblem(PolynomialChaos, n=50, fail=True, nan_policy='omit')
     out = problem.evaluate(x, return_as_dictionary=True)
     assert np.isfinite(out['F'][0, 0])
+
+
+def _mixed_space(*values):
+    space = StochasticParameterSpace()
+    for i, value in enumerate(values):
+        space.add_parameter(InputParameter(f'p{i}', value))
+    return space
+
+
+def test_pce_counts_terms_over_the_stochastic_parameters_only():
+    """Regression: n_terms counted every parameter while the basis holds only the stochastic ones, so a
+    deterministic parameter silently raised the degree - here degree 2 asked a 1-D basis for 6 terms, which is a
+    degree-5 expansion - and inflated the sample requirement with it"""
+    assert PolynomialChaos(_mixed_space(ot.Normal(1., .05)), n_evaluations=40, degree=2).n_terms == 3
+    assert PolynomialChaos(_mixed_space(ot.Normal(1., .05), 1.225), n_evaluations=40, degree=2).n_terms == 3
+
+
+def test_pce_needs_enough_samples_for_the_stochastic_parameters_only():
+    """A deterministic parameter adds no terms, so it must not inflate the sample requirement either"""
+    space = _mixed_space(ot.Normal(0., 1.), 1., 2., 3.)
+
+    PolynomialChaos(space, n_evaluations=9, degree=8)  # degree 8 in 1 stochastic dimension: 9 terms
+
+    with pytest.raises(ValueError, match='9 terms'):
+        PolynomialChaos(space, n_evaluations=8, degree=8)
+
+
+def test_pce_fits_a_response_with_a_deterministic_parameter():
+    """Regression: a Dirac marginal broke the chaos basis outright (NotYetImplementedException from the enumerate
+    function). Deterministic parameters are now kept out of the joint distribution entirely"""
+    space = _mixed_space(ot.Normal(1., .05), 1.225)
+    method = PolynomialChaos(space, n_evaluations=40, seed=42, degree=2)
+
+    samples = method.get_samples()
+    assert samples.shape == (40, 1)  # only the stochastic parameter is drawn
+
+    values = space.include_deterministic_values(samples)
+    result = method.process_results((values[:, 0]**2 + values[:, 1]).reshape((-1, 1)))
+
+    chaos_result = result.method_result[0]
+    assert chaos_result is not None  # actually fitted, not passed through
+    assert chaos_result.getMetaModel().getInputDimension() == 1  # the constant is not an input
+    assert chaos_result.getCoefficients().getSize() == 3  # degree 2 in one dimension
+    assert result.outputs[0].mean() == pytest.approx(1. + .05**2 + 1.225, abs=1e-3)
+
+
+def test_pce_handles_a_deterministic_parameter_in_any_column():
+    """The constants can sit anywhere in the space, so which columns are stochastic must not matter"""
+    space = _mixed_space(2.5, ot.Normal(1., .05))
+    method = PolynomialChaos(space, n_evaluations=40, seed=42, degree=2)
+
+    values = space.include_deterministic_values(method.get_samples())
+    result = method.process_results((values[:, 1]**2 + values[:, 0]).reshape((-1, 1)))
+
+    assert result.method_result[0] is not None
+    assert result.outputs[0].mean() == pytest.approx(1. + .05**2 + 2.5, abs=1e-3)
+
+
+def test_pce_sobol_indices_are_over_the_stochastic_parameters():
+    """The expansion is built over the stochastic parameters only, so Sobol index i refers to the i-th of those
+    rather than to parameter i of the space"""
+    space = _mixed_space(ot.Normal(1., .3), 5.0, ot.Normal(2., .1))
+    method = PolynomialChaos(space, n_evaluations=60, seed=42, degree=2)
+
+    values = space.include_deterministic_values(method.get_samples())
+    result = method.process_results((values[:, 0]**2).reshape((-1, 1)))  # only p0 matters
+
+    chaos_result = result.method_result[0]
+    assert chaos_result.getMetaModel().getInputDimension() == 2  # the constant is not an input
+
+    sobol = ot.FunctionalChaosSobolIndices(chaos_result)
+    assert sobol.getSobolIndex(0) == pytest.approx(1., abs=1e-6)  # p0
+    assert sobol.getSobolIndex(1) == pytest.approx(0., abs=1e-6)  # p2, not the constant
+
+
+def test_problem_rejects_an_entirely_deterministic_space():
+    """Nothing varies, so there is no uncertainty to propagate and the problem is a deterministic one"""
+    space = _mixed_space(1.5, 2.5)
+
+    with pytest.raises(ValueError, match='stochastic parameters'):
+        StochasticArchOptProblem([Real(bounds=(0., 1.))],
+                                 uq_method=MonteCarlo(space, n_evaluations=10), n_obj=1)
 
 
 def test_pce_uses_all_samples_it_asked_for():
