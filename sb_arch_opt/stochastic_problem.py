@@ -61,6 +61,9 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         if uq_method.param_space is None or uq_method.param_space.n_parameters == 0:
             raise ValueError('uq_method must contain valid parameter space')
 
+        if uq_method.param_space.n_stochastic_parameters == 0:
+            raise ValueError('The parameter does not contain any stochastic parameters. Consider formulating it as a deterministic problem')
+
         self.uq_method = uq_method
         # List for storing stochastic results object for each design point
         self.stochastic_results: List[StochasticResults] = []
@@ -103,7 +106,9 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         if not self.design_space.is_explicit():
             self._correct_x_impute(x, is_active_out)
 
+        # Get samples
         samples = self.uq_method.get_samples()
+
         n_x, n_s = x.shape[0], samples.shape[0]
 
         f_s = np.zeros((n_x, n_s, self.n_obj))*np.nan
@@ -112,8 +117,10 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         # Evaluate all design vectors for each realization of the uncertain parameters
         for i in range(n_s):
+            # Include deterministic parameter values for evaluation
+            parameter_values = self.uq_method.param_space.include_deterministic_values(samples)
             self._arch_evaluate_sample(
-                x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], samples[i, :],*args, **kwargs)
+                x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], parameter_values,*args, **kwargs)
 
         # Evaluate the stochastic result for all the evaluated design vectors and samples
         nan_policy = self.nan_policy

@@ -70,20 +70,24 @@ class Quantile(RobustMeasure):
 
 
 class InputParameter:
-    """An input parameter: a quantity that influences the evaluation. Converts deterministic to Dirac pulse."""
+    """An input parameter used to evaluate architecture objectives or constraints. Supports deterministic and stochastic parameters."""
 
     def __init__(self, name, value: Union[ot.DistributionImplementation, float]):
         self.name = name
 
         if not isinstance(value, (ot.DistributionImplementation, ot.Distribution)):
-            value = ot.Dirac(float(value))
-        self.distribution = value
+            value = float(value)
+        self.value = value
 
     def mean(self) -> float:
-        return self.distribution.getMean()[0]
+        if isinstance(self.value, float):
+            return self.value
+        return self.value.getMean()[0]
 
     def std(self) -> float:
-        return self.distribution.getStandardDeviation()[0]
+        if isinstance(self.value, float):
+            return 0.0
+        return self.value.getStandardDeviation()[0]
 
 
 class StochasticParameterSpace:
@@ -92,13 +96,23 @@ class StochasticParameterSpace:
     def __init__(self):
         self._sample = None
         self.parameters: List[InputParameter] = []
+        self.stochastic_parameters = []
+        self.deterministic_parameters = []
 
     def add_parameter(self, parameter: InputParameter):
         self.parameters.append(parameter)
+        if not isinstance(parameter.value, float):
+            self.stochastic_parameters.append(parameter)
+        else:
+            self.deterministic_parameters.append(parameter)
 
     @property
     def n_parameters(self) -> int:
         return len(self.parameters)
+
+    @property
+    def n_stochastic_parameters(self) -> int:
+        return len(self.stochastic_parameters)
 
     @property
     def parameter_names(self) -> List[str]:
@@ -107,8 +121,8 @@ class StochasticParameterSpace:
     @property
     def joint_dist(self) -> ot.JointDistribution:
         """ Joint distribution of independent variables is chosen """
-        return ot.JointDistribution([parameter.distribution for parameter in self.parameters],
-                                    ot.IndependentCopula(self.n_parameters))
+        return ot.JointDistribution([parameter.value for parameter in self.stochastic_parameters],
+                                    ot.IndependentCopula(self.n_stochastic_parameters))
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
         """Draw n samples of all parameters; returns an n x n_parameters matrix"""
@@ -121,6 +135,18 @@ class StochasticParameterSpace:
         result = lhs.generate()
         self._sample = result
         return np.array(result)
+
+    def include_deterministic_values(self, samples: np.ndarray) -> np.ndarray:
+        """Add missing deterministic parameters to the sample."""
+        extended_samples = np.zeros((samples.shape[0], self.n_parameters))
+        n_d = 0
+        for i, parameter in enumerate(self.parameters):
+            if isinstance(parameter.value, float):
+                extended_samples[:, i] = parameter.value
+                n_d += 1
+            else:
+                extended_samples[:, i] = samples[:, i-n_d]
+        return extended_samples
 
 
 class StochasticOutput:

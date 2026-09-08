@@ -77,7 +77,7 @@ def test_deterministic_parameter_becomes_a_dirac(value):
     accepted too: it is the most natural way to write a constant, and `isinstance(value, float)` would miss it"""
     param = InputParameter('rho', value)
 
-    assert isinstance(param.distribution, ot.DistributionImplementation)
+    assert isinstance(param.value, ot.DistributionImplementation)
     assert param.mean() == pytest.approx(float(value))
     assert param.std() == pytest.approx(0.)
 
@@ -89,8 +89,10 @@ def test_deterministic_parameter_joins_the_joint_distribution():
     space.add_parameter(InputParameter('rho', 1.225))
 
     samples = space.get_random_samples(20)
-    assert samples.shape == (20, 2)
-    assert np.all(samples[:, 1] == 1.225)
+    samples_with_deterministic = space.include_deterministic_values(samples)
+    assert samples.shape == (20, 1)
+    assert samples_with_deterministic.shape == (20, 2)
+    assert np.all(samples_with_deterministic[:, 1] == 1.225)
     assert samples[:, 0].std() > 0.
 
 
@@ -98,13 +100,17 @@ def test_parameter_space_joint_dist():
     space = StochasticParameterSpace()
     space.add_parameter(InputParameter('a', ot.Normal(0., 1.)))
     space.add_parameter(InputParameter('b', ot.Uniform(0., 1.)))
+    space.add_parameter(InputParameter('c', 2.0))
 
-    assert space.n_parameters == 2
-    assert space.parameter_names == ['a', 'b']
+    assert space.n_parameters == 3
+    assert space.n_stochastic_parameters == 2
+    assert space.parameter_names == ['a', 'b', 'c']
     assert space.joint_dist.getDimension() == 2
 
     samples = space.get_random_samples(20)
+    samples_with_deterministic = space.include_deterministic_values(samples)
     assert samples.shape == (20, 2)
+    assert samples_with_deterministic.shape == (20, 3)
 
 
 def test_parameter_space_lhs_samples_are_stratified():
@@ -122,7 +128,7 @@ def test_parameter_space_lhs_samples_are_stratified():
 def _n_occupied_strata(space, samples, i_param):
     """How many of the n equiprobable strata of marginal `i_param` contain at least one sample"""
     n = samples.shape[0]
-    cdf = np.array([space.parameters[i_param].distribution.computeCDF(v) for v in samples[:, i_param]])
+    cdf = np.array([space.parameters[i_param].value.computeCDF(v) for v in samples[:, i_param]])
     return len(np.unique(np.floor(cdf*n).astype(int)))
 
 
