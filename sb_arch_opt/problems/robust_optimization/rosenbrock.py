@@ -32,11 +32,11 @@ class StochasticRosenbrock(StochasticArchOptProblem):
     Note that only `_arch_evaluate_sample` is implemented, and that it is vectorized over all design points: the
     loop over uncertain-parameter samples is owned by `StochasticArchOptProblem`.
 
-    A UQ method is constructed over a parameter space, so passing your own means building the space first:
+    A UQ method is configured independently and receives the parameter space when drawing samples / processing results:
 
     ```python
-    param_space = StochasticRosenbrock.get_parameter_space(n_var=2)
-    problem = StochasticRosenbrock(uq_method=PolynomialChaos(param_space, n_evaluations=40, degree=3))
+    method = PolynomialChaos(n_evaluations=40, degree=3, seed=42)
+    problem = StochasticRosenbrock(n_var=2, uq_method=method)
     ```
     """
 
