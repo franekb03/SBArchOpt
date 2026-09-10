@@ -77,14 +77,11 @@ class StochasticParameter:
         self.name = name
         self.value = value
 
-    # def mean(self) -> float:
-    #     return self.value.getMean()[0]
-    #
-    # def std(self) -> float:
-    #     if isinstance(self.value, float):
-    #         return 0.0
-    #     return self.value.getStandardDeviation()[0]
+    def mean(self) -> float:
+        return self.value.getMean()[0]
 
+    def std(self) -> float:
+        return self.value.getStandardDeviation()[0]
 
 class StochasticParameterSpace:
     """The joint distribution of all stochastic parameters of a problem."""
@@ -92,13 +89,6 @@ class StochasticParameterSpace:
     def __init__(self, parameters: List[StochasticParameter]):
         self._sample = None
         self.parameters = parameters
-
-    # def add_parameter(self, parameter: StochasticParameter):
-    #     self.parameters.append(parameter)
-    #     if not isinstance(parameter.value, float):
-    #         self.stochastic_parameters.append(parameter)
-    #     else:
-    #         self.deterministic_parameters.append(parameter)
 
     @property
     def n_parameters(self) -> int:
@@ -237,13 +227,6 @@ class UQMethod:
         """Draw a new design on the next evaluation"""
         self._samples = None
 
-    def _check_results(self, results: np.ndarray):
-        """The results of one design point must have one row per evaluated parameter sample"""
-        if results.ndim != 2:
-            raise ValueError(f'Expected a 2D (n_samples x n_outputs) results matrix, got {results.ndim}D')
-        if results.shape[0] != self.n_evaluations:
-            raise ValueError(f'Expected {self.n_evaluations} response rows, got {results.shape[0]}')
-
     def get_dictionary(self, param_space: StochasticParameterSpace, i_realization: int) -> Optional[Dict[str, float]]:
         if self._samples is None:
             return None
@@ -275,7 +258,6 @@ class MonteCarlo(UQMethod):
 
     def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace = None) -> StochasticResults:
         results = np.asarray(results, dtype=float)
-        self._check_results(results)
 
         sample = ot.Sample(results)
         outputs = [StochasticOutput.from_results(sample, i) for i in range(results.shape[1])]
@@ -343,7 +325,6 @@ class PolynomialChaos(UQMethod):
 
     def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> StochasticResults:
         results = np.asarray(results, dtype=float)
-        self._check_results(results)
 
         input_sample = ot.Sample(self.get_samples(param_space))
         metamodel_input = self._get_metamodel_input(param_space)

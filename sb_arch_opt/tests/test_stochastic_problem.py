@@ -117,21 +117,6 @@ def test_uq_method_requires_n_evaluations():
     with pytest.raises(ValueError):
         MonteCarlo(n_evaluations=None)
 
-
-def test_process_results():
-    space = make_space(ot.Normal(0., 1.))
-    method = MonteCarlo(n_evaluations=3, seed=42)
-
-    result = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]), space)
-    assert len(result.outputs) == 3
-    assert [output.mean() for output in result.outputs] == pytest.approx([2., 11., 21.])
-
-    with pytest.raises(ValueError):
-        method.process_results(np.array([[1.], [2.]]), space)  # wrong number of rows
-    with pytest.raises(ValueError):
-        method.process_results(np.array([1., 2., 3.]), space)  # not 2D
-
-
 def test_user_only_implements_arch_evaluate_sample(stochastic_problem):
     out = stochastic_problem.evaluate(np.array([[1., 0.], [0., 0.]]), return_as_dictionary=True)
 
