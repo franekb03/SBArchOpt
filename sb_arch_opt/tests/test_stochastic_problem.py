@@ -23,7 +23,7 @@ class VectorizedProblem(StochasticArchOptProblem):
     @staticmethod
     def get_parameter_space():
         param_space = StochasticParameterSpace()
-        param_space.add_parameter(InputParameter('u0', ot.Normal(1., .05)))
+        param_space.add_parameter(StochasticParameter('u0', ot.Normal(1., .05)))
         return param_space
 
     def _is_conditionally_active(self):
@@ -41,8 +41,8 @@ class HierarchicalProblem(StochasticArchOptProblem):
 
     def __init__(self, n=50, seed=1, **kwargs):
         param_space = StochasticParameterSpace()
-        param_space.add_parameter(InputParameter('payload', ot.Normal(2., .3)))
-        param_space.add_parameter(InputParameter('bsfc', ot.Normal(.42, .075)))
+        param_space.add_parameter(StochasticParameter('payload', ot.Normal(2., .3)))
+        param_space.add_parameter(StochasticParameter('bsfc', ot.Normal(.42, .075)))
         super().__init__([Choice(options=['electric', 'hybrid']), Real(bounds=(.2, 1.)), Real(bounds=(.1, .4))],
                          uq_method=MonteCarlo(param_space, n_evaluations=n, seed=seed),
                          n_obj=1, n_ieq_constr=1, **kwargs)
@@ -66,9 +66,9 @@ class HierarchicalProblem(StochasticArchOptProblem):
 
 
 def test_parameter_mean_and_std():
-    param = InputParameter('u', ot.Normal(5., .3))
-    assert param.mean() == pytest.approx(5.)
-    assert param.std() == pytest.approx(.3)  # not the mean: getParameter()[0] would give 5.
+    param = StochasticParameter('u', ot.Uniform(3., 5.))
+    assert param.mean() == pytest.approx(4.)
+    assert param.std() == pytest.approx(1.)  # not the mean: getParameter()[0] would give 5.
 
 
 @pytest.mark.parametrize('value', [1.225, 5, np.float64(2.5)])
@@ -76,7 +76,7 @@ def test_deterministic_parameter_stays_a_plain_value(value):
     """A deterministic parameter is kept as a number rather than wrapped in a distribution: it has no orthonormal
     polynomial family to contribute to a chaos basis, so it cannot be a marginal of the joint distribution. Note
     an int is accepted too - it is the most natural way to write a constant"""
-    param = InputParameter('rho', value)
+    param = StochasticParameter('rho', value)
 
     assert isinstance(param.value, float)
     assert param.mean() == pytest.approx(float(value))
@@ -85,8 +85,8 @@ def test_deterministic_parameter_stays_a_plain_value(value):
 
 def test_space_separates_stochastic_from_deterministic_parameters():
     space = StochasticParameterSpace()
-    u = InputParameter('u', ot.Normal(0., 1.))
-    rho = InputParameter('rho', 1.225)
+    u = StochasticParameter('u', ot.Normal(0., 1.))
+    rho = StochasticParameter('rho', 1.225)
     space.add_parameter(u)
     space.add_parameter(rho)
 
@@ -101,8 +101,8 @@ def test_deterministic_parameters_are_reinserted_into_a_realization():
     """Only the stochastic parameters are drawn; the constants are put back so that a realization covers every
     parameter of the space and can be indexed by position"""
     space = StochasticParameterSpace()
-    space.add_parameter(InputParameter('u', ot.Normal(0., 1.)))
-    space.add_parameter(InputParameter('rho', 1.225))
+    space.add_parameter(StochasticParameter('u', ot.Normal(0., 1.)))
+    space.add_parameter(StochasticParameter('rho', 1.225))
 
     samples = space.get_random_samples(20)
     assert samples.shape == (20, 1)  # the Dirac column is not drawn at all
@@ -117,10 +117,10 @@ def test_deterministic_parameters_are_reinserted_into_a_realization():
 def test_deterministic_values_are_reinserted_in_the_right_columns():
     """The constants can sit anywhere in the space, so the stochastic columns have to be shifted past them"""
     space = StochasticParameterSpace()
-    space.add_parameter(InputParameter('d0', 1.))
-    space.add_parameter(InputParameter('s0', ot.Normal(10., 1.)))
-    space.add_parameter(InputParameter('d1', 2.))
-    space.add_parameter(InputParameter('s1', ot.Normal(20., 1.)))
+    space.add_parameter(StochasticParameter('d0', 1.))
+    space.add_parameter(StochasticParameter('s0', ot.Normal(10., 1.)))
+    space.add_parameter(StochasticParameter('d1', 2.))
+    space.add_parameter(StochasticParameter('s1', ot.Normal(20., 1.)))
 
     samples = space.get_random_samples(8)
     assert samples.shape == (8, 2)
@@ -135,9 +135,9 @@ def test_deterministic_values_are_reinserted_in_the_right_columns():
 
 def test_parameter_space_joint_dist():
     space = StochasticParameterSpace()
-    space.add_parameter(InputParameter('a', ot.Normal(0., 1.)))
-    space.add_parameter(InputParameter('b', ot.Uniform(0., 1.)))
-    space.add_parameter(InputParameter('c', 2.0))
+    space.add_parameter(StochasticParameter('a', ot.Normal(0., 1.)))
+    space.add_parameter(StochasticParameter('b', ot.Uniform(0., 1.)))
+    space.add_parameter(StochasticParameter('c', 2.0))
 
     assert space.n_parameters == 3
     assert space.n_stochastic_parameters == 2
@@ -179,7 +179,7 @@ def _output(values):
 def _space(n=1):
     space = StochasticParameterSpace()
     for i in range(n):
-        space.add_parameter(InputParameter(f'u{i}', ot.Normal(0., 1.)))
+        space.add_parameter(StochasticParameter(f'u{i}', ot.Normal(0., 1.)))
     return space
 
 
@@ -197,7 +197,7 @@ def test_reduce_quantile_matches_quantile_method():
     assert out.reduce(Quantile(q=.9)) == pytest.approx(out.quantile(.9))
 
 
-def test_measure_parameters_validated_at_construction():
+def test_scalar_parameters_validated_at_construction():
     """A bad configuration should fail when the problem is built, not on the first evaluation"""
     with pytest.raises(ValueError):
         Quantile(q=2.)
@@ -223,26 +223,20 @@ def test_margin_penalizes_spread_in_both_directions():
     assert narrow.reduce(Margin(k=2., direction=1)) > wide.reduce(Margin(k=2., direction=1))  # maximized
 
 
-def test_measures_carry_their_own_parameters():
-    """Two measures of the same kind but different parameters reduce the same samples differently"""
+def test_scalars_carry_their_own_parameters():
+    """Two scalars of the same kind but different parameters reduce the same samples differently"""
     out = _output(np.linspace(0., 10., 101))
     assert out.reduce(Quantile(q=.5)) != out.reduce(Quantile(q=.95))
     assert out.reduce(Margin(k=1.)) != out.reduce(Margin(k=3.))
 
 
-def test_custom_measure_needs_no_library_change():
-    """The point of the RobustMeasure hierarchy: a new measure is one class, wired in nowhere"""
-    class WorstCase(RobustMeasure):
+def test_custom_scalar_needs_no_library_change():
+    """The point of the Robustscalar hierarchy: a new scalar is one class, wired in nowhere"""
+    class WorstCase(Scalarization):
         def reduce(self, samples):
             return float(samples.getMax()[0])
 
     assert _output([1., 5., 3.]).reduce(WorstCase()) == pytest.approx(5.)
-
-
-def test_reduce_rejects_unknown_nan_policy():
-    with pytest.raises(ValueError):
-        _output([1., 2.]).reduce(Mean(), nan_policy='whatever')
-
 
 """### UQ methods ###"""
 
@@ -253,7 +247,7 @@ def test_uq_method_is_constructed_over_a_parameter_space():
     method = MonteCarlo(space, n_evaluations=10)
 
     assert method.param_space is space
-    assert method.n_samples == 10
+    assert method.n_evaluations == 10
     assert method.get_samples().shape == (10, 2)
 
 
@@ -337,8 +331,8 @@ class MixedParameterProblem(StochasticArchOptProblem):
 
     def __init__(self, n=10, **kwargs):
         space = StochasticParameterSpace()
-        space.add_parameter(InputParameter('u', ot.Normal(1., .05)))
-        space.add_parameter(InputParameter('rho', 1.225))
+        space.add_parameter(StochasticParameter('u', ot.Normal(1., .05)))
+        space.add_parameter(StochasticParameter('rho', 1.225))
         self.seen = []
         super().__init__([Real(bounds=(-2., 2.))], uq_method=MonteCarlo(space, n_evaluations=n, seed=42),
                          n_obj=1, **kwargs)
@@ -421,8 +415,8 @@ def test_correction_runs_for_implicit_design_space():
 
 
 def test_hierarchical_problem_with_constraint():
-    problem = HierarchicalProblem(obj_measure=[Margin(k=2.)],
-                                  ieq_constr_measure=[Quantile(q=.95)])
+    problem = HierarchicalProblem(obj_scalar=[Margin(k=2.)],
+                                  ieq_constr_scalar=[Quantile(q=.95)])
     out = problem.evaluate(np.array([[0, .6, .25], [1, .6, .25]]), return_as_dictionary=True)
 
     assert out['F'].shape == (2, 1)
@@ -432,14 +426,14 @@ def test_hierarchical_problem_with_constraint():
 
 
 class AllResponseKindsProblem(StochasticArchOptProblem):
-    """One objective, one inequality constraint and one equality constraint, each with a different measure"""
+    """One objective, one inequality constraint and one equality constraint, each with a different scalar"""
 
     def __init__(self, **kwargs):
         param_space = StochasticParameterSpace()
-        param_space.add_parameter(InputParameter('u', ot.Normal(1., .2)))
-        kwargs.setdefault('obj_measure', [Mean()])
-        kwargs.setdefault('ieq_constr_measure', [Mean()])
-        kwargs.setdefault('eq_constr_measure', [Margin(k=3.)])
+        param_space.add_parameter(StochasticParameter('u', ot.Normal(1., .2)))
+        kwargs.setdefault('obj_scalar', [Mean()])
+        kwargs.setdefault('ieq_constr_scalar', [Mean()])
+        kwargs.setdefault('eq_constr_scalar', [Margin(k=3.)])
         super().__init__([Real(bounds=(0., 1.))],
                          uq_method=MonteCarlo(param_space, n_evaluations=200, seed=5),
                          n_obj=1, n_ieq_constr=1, n_eq_constr=1, **kwargs)
@@ -456,9 +450,9 @@ class AllResponseKindsProblem(StochasticArchOptProblem):
         h_out[:, 0] = parameters[0] * x[:, 0]
 
 
-def test_equality_constraints_use_their_own_measure():
+def test_equality_constraints_use_their_own_scalar():
     """Regression: the equality-constraint loop used to index the inequality-constraint parameter list, so H was
-    reduced with the wrong measure (or raised IndexError when the two lists differed in length)."""
+    reduced with the wrong scalar (or raised IndexError when the two lists differed in length)."""
     problem = AllResponseKindsProblem()
     out = problem.evaluate(np.array([[.5]]), return_as_dictionary=True)
 
@@ -471,9 +465,9 @@ def test_equality_constraints_use_their_own_measure():
     assert out['F'][0, 0] == pytest.approx(f_output.mean())
 
 
-def test_measure_counts_checked_per_response_kind():
+def test_scalar_counts_checked_per_response_kind():
     with pytest.raises(ValueError):
-        AllResponseKindsProblem(eq_constr_measure=[Mean(), Mean()])
+        AllResponseKindsProblem(eq_constr_scalar=[Mean(), Mean()])
 
 
 """### Statistics carried in the output ###"""
@@ -492,8 +486,8 @@ def test_statistics_available_per_design_point():
 
 def test_reported_statistics_reproduce_the_reduced_value():
     """The statistics handed back must be exactly what the optimizer saw, not a differently-estimated version."""
-    problem = HierarchicalProblem(obj_measure=[Margin(k=2.)],
-                                  ieq_constr_measure=[Quantile(q=.95)])
+    problem = HierarchicalProblem(obj_scalar=[Margin(k=2.)],
+                                  ieq_constr_scalar=[Quantile(q=.95)])
     out = problem.evaluate(np.array([[1, .6, .25]]), return_as_dictionary=True)
 
     result = out['stochastic'][0]
@@ -512,46 +506,35 @@ class FailingProblem(VectorizedProblem):
 
 
 def test_nan_policy_propagate_fails_the_design_point():
-    problem = FailingProblem(n=50, seed=3, nan_policy='propagate')
+    problem = FailingProblem(n=50, seed=3)
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
 
     assert not np.isfinite(out['F'][0, 0])
     assert problem.get_failed_points(out)[0]
 
-
-def test_nan_policy_omit_reduces_over_surviving_samples():
-    problem = FailingProblem(n=50, seed=3, nan_policy='omit')
-    out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
-
-    values = out['stochastic'][0].outputs[0].to_numpy()
-    assert np.any(~np.isfinite(values))  # some samples did fail
-    assert np.isfinite(out['F'][0, 0])  # but the design point still has a value
-    assert out['F'][0, 0] == pytest.approx(np.mean(values[np.isfinite(values)]))
-
-
 """### Configuration checks ###"""
 
 
-def test_obj_measure_count_checked():
+def test_obj_scalar_count_checked():
     space = _space()
     with pytest.raises(ValueError):
         StochasticArchOptProblem([Real(bounds=(0., 1.))],
                                  uq_method=MonteCarlo(space, n_evaluations=10), n_obj=1,
-                                 obj_measure=[Mean(), Mean()])
+                                 obj_scalar=[Mean(), Mean()])
 
 
-def test_ieq_constr_measure_checked_against_n_ieq_constr():
+def test_ieq_constr_scalar_checked_against_n_ieq_constr():
     """Regression: this used to be validated against n_obj"""
     with pytest.raises(ValueError):
-        HierarchicalProblem(ieq_constr_measure=[Mean(), Mean()])
+        HierarchicalProblem(ieq_constr_scalar=[Mean(), Mean()])
 
-    # a matching number of constraint measures is accepted
-    HierarchicalProblem(ieq_constr_measure=[Mean()])
+    # a matching number of constraint scalars is accepted
+    HierarchicalProblem(ieq_constr_scalar=[Mean()])
 
 
-def test_measures_must_be_robust_measure_instances():
+def test_scalars_must_be_robust_scalar_instances():
     with pytest.raises(ValueError):
-        HierarchicalProblem(ieq_constr_measure=['quantile'])
+        HierarchicalProblem(ieq_constr_scalar=['quantile'])
 
 
 def test_uq_method_required():
@@ -573,12 +556,12 @@ class QuadraticProblem(StochasticArchOptProblem):
 
     def __init__(self, uq_method_class=MonteCarlo, n=50, fail=False, method_kwargs=None, **kwargs):
         param_space = StochasticParameterSpace()
-        param_space.add_parameter(InputParameter('u', ot.Normal(1., .05)))
+        param_space.add_parameter(StochasticParameter('u', ot.Normal(1., .05)))
         self.fail = fail
         super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))],
                          uq_method=uq_method_class(param_space, n_evaluations=n, seed=42,
                                                    **(method_kwargs or {})),
-                         n_obj=1, obj_measure=[Mean()], **kwargs)
+                         n_obj=1, obj_scalar=[Mean()], **kwargs)
 
     def _is_conditionally_active(self):
         return [False, False]
@@ -658,21 +641,17 @@ def test_pce_falls_back_to_raw_samples_when_evaluations_fail():
     """A response with failed evaluations cannot be fitted; nan_policy then decides as usual"""
     x = np.array([[.5, .5]])
 
-    problem = QuadraticProblem(PolynomialChaos, n=50, fail=True, nan_policy='propagate')
+    problem = QuadraticProblem(PolynomialChaos, n=50, fail=True)
     out = problem.evaluate(x, return_as_dictionary=True)
     assert out['stochastic'][0].method_result[0] is None  # not fitted
     assert not np.isfinite(out['F'][0, 0])
     assert problem.get_failed_points(out)[0]
 
-    problem = QuadraticProblem(PolynomialChaos, n=50, fail=True, nan_policy='omit')
-    out = problem.evaluate(x, return_as_dictionary=True)
-    assert np.isfinite(out['F'][0, 0])
-
 
 def _mixed_space(*values):
     space = StochasticParameterSpace()
     for i, value in enumerate(values):
-        space.add_parameter(InputParameter(f'p{i}', value))
+        space.add_parameter(StochasticParameter(f'p{i}', value))
     return space
 
 
@@ -704,7 +683,7 @@ def test_pce_fits_a_response_with_a_deterministic_parameter():
     assert samples.shape == (40, 1)  # only the stochastic parameter is drawn
 
     values = space.include_deterministic_values(samples)
-    result = method.process_results((values[:, 0]**2 + values[:, 1]).reshape((-1, 1)))
+    result = method.process_results()
 
     chaos_result = result.method_result[0]
     assert chaos_result is not None  # actually fitted, not passed through
@@ -719,7 +698,7 @@ def test_pce_handles_a_deterministic_parameter_in_any_column():
     method = PolynomialChaos(space, n_evaluations=40, seed=42, degree=2)
 
     values = space.include_deterministic_values(method.get_samples())
-    result = method.process_results((values[:, 1]**2 + values[:, 0]).reshape((-1, 1)))
+    result = method.process_results()
 
     assert result.method_result[0] is not None
     assert result.outputs[0].mean() == pytest.approx(1. + .05**2 + 2.5, abs=1e-3)
@@ -732,7 +711,7 @@ def test_pce_sobol_indices_are_over_the_stochastic_parameters():
     method = PolynomialChaos(space, n_evaluations=60, seed=42, degree=2)
 
     values = space.include_deterministic_values(method.get_samples())
-    result = method.process_results((values[:, 0]**2).reshape((-1, 1)))  # only p0 matters
+    result = method.process_results()  # only p0 matters
 
     chaos_result = result.method_result[0]
     assert chaos_result.getMetaModel().getInputDimension() == 2  # the constant is not an input

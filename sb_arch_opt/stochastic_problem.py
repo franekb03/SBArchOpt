@@ -40,53 +40,46 @@ class StochasticArchOptProblem(ArchOptProblemBase):
     """
 
     def __init__(self, des_vars: Union[List[Variable], ArchDesignSpace],
+                 param_space: StochasticParameterSpace,
                  uq_method: UQMethod, n_obj=1, n_ieq_constr=0, n_eq_constr=0,
-                 obj_measure: List[RobustMeasure] = None,
-                 ieq_constr_measure: List[RobustMeasure] = None,
-                 eq_constr_measure: List[RobustMeasure] = None,
-                 nan_policy: str = 'propagate', **kwargs):
+                 obj_scalar: List[Scalarization] = None,
+                 ieq_constr_scalar: List[Scalarization] = None,
+                 eq_constr_scalar: List[Scalarization] = None,
+                 **kwargs):
 
-        self.obj_measure = self.check_measures(obj_measure, n_obj, 'obj_measure')
-        self.ieq_constr_measure = self.check_measures(ieq_constr_measure, n_ieq_constr, 'ieq_constr_measure')
-        self.eq_constr_measure = self.check_measures(eq_constr_measure, n_eq_constr, 'eq_constr_measure')
-        self.measures = self.obj_measure + self.ieq_constr_measure + self.eq_constr_measure
-
-        self.nan_policy = nan_policy
+        self.obj_scalar = self.check_scalars(obj_scalar, n_obj)
+        self.ieq_constr_scalar = self.check_scalars(ieq_constr_scalar, n_ieq_constr)
+        self.eq_constr_scalar = self.check_scalars(eq_constr_scalar, n_eq_constr)
+        self.scalars = self.obj_scalar + self.ieq_constr_scalar + self.eq_constr_scalar
 
         if uq_method is None:
             raise ValueError('A UQ method must be specified, e.g. uq_method=MonteCarlo(n_evaluations=100, seed=42)')
         if not isinstance(uq_method, UQMethod):
             raise ValueError(f'uq_method should be a UQMethod instance, got: {uq_method!r}')
 
-        if uq_method.param_space is None or uq_method.param_space.n_parameters == 0:
-            raise ValueError('uq_method must contain valid parameter space')
+        if param_space is None or param_space.n_parameters == 0:
+            raise ValueError('param_space must contain valid parameter space')
 
-        if uq_method.param_space.n_stochastic_parameters == 0:
-            raise ValueError('The parameter does not contain any stochastic parameters. Consider formulating it as a deterministic problem')
-
+        self.param_space = param_space
         self.uq_method = uq_method
         # List for storing stochastic results object for each design point
         self.stochastic_results: List[StochasticResults] = []
 
         super().__init__(des_vars, n_obj=n_obj, n_ieq_constr=n_ieq_constr, n_eq_constr=n_eq_constr, **kwargs)
 
-    @property
-    def param_space(self):
-        return self.uq_method.param_space
-
     @staticmethod
-    def check_measures(measures: Optional[List[RobustMeasure]], n: int, name: str) -> List[RobustMeasure]:
+    def check_scalars(scalars: Optional[List[Scalarization]], n: int) -> List[Scalarization]:
         """Default unspecified responses to the expected value, and check the count"""
-        if measures is None:
-            # Mean is the default robust measure type
+        if scalars is None:
+            # Mean is the default robust scalar type
             return [Mean() for _ in range(n)]
 
-        if len(measures) != n:
-            raise ValueError(f'{name} should have {n} entries: {len(measures)}')
-        for measure in measures:
-            if not isinstance(measure, RobustMeasure):
-                raise ValueError(f'{name} should contain RobustMeasure instances, got: {measure!r}')
-        return list(measures)
+        if len(scalars) != n:
+            raise ValueError(f'{type(Scalarization)} should have {n} entries: {len(scalars)}')
+        for scalar in scalars:
+            if not isinstance(scalar, Scalarization):
+                raise ValueError(f'{type(Scalarization)} should contain Scalarization instances, got: {scalar!r}')
+        return list(scalars)
 
     def _evaluate(self, x, out, *args, **kwargs):
         # The pymoo outputs are processed by the parent method
@@ -107,8 +100,8 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             self._correct_x_impute(x, is_active_out)
 
         # Get samples and include deterministic parameter values for evaluation
-        samples = self.uq_method.get_samples()
-        parameter_values = self.uq_method.param_space.include_deterministic_values(samples)
+        samples = self.uq_method.get_samples(self.param_space)
+        # parameter_values = self.uq_method.param_space.include_deterministic_values(samples)
 
         n_x, n_s = x.shape[0], samples.shape[0]
 
@@ -119,24 +112,22 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         # Evaluate all design vectors for each realization of the uncertain parameters
         for i in range(n_s):
             self._arch_evaluate_sample(
-                x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], parameter_values[i, :],*args, **kwargs)
+                x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], samples[i, :],*args, **kwargs)
 
         # Evaluate the stochastic result for all the evaluated design vectors and samples
-        nan_policy = self.nan_policy
         self.stochastic_results = []
         for x_i in range(n_x):
-            results = self.uq_method.process_results(
-                np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1))
+            results = self.uq_method.process_results(np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1))
             self.stochastic_results.append(results)
 
             # Reduce the sampled responses of each design point to the values the optimizer sees
             n_f, n_g = self.n_obj, self.n_ieq_constr
             for f_i, output in enumerate(results.outputs[:n_f]):
-                f_out[x_i, f_i] = output.reduce(self.obj_measure[f_i], nan_policy=nan_policy)
+                f_out[x_i, f_i] = output.reduce(self.obj_scalar[f_i])
             for g_i, output in enumerate(results.outputs[n_f:n_f+n_g]):
-                g_out[x_i, g_i] = output.reduce(self.ieq_constr_measure[g_i], nan_policy=nan_policy)
+                g_out[x_i, g_i] = output.reduce(self.ieq_constr_scalar[g_i])
             for h_i, output in enumerate(results.outputs[n_f+n_g:]):
-                h_out[x_i, h_i] = output.reduce(self.eq_constr_measure[h_i], nan_policy=nan_policy)
+                h_out[x_i, h_i] = output.reduce(self.eq_constr_scalar[h_i])
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, parameters: np.ndarray, *args, **kwargs):

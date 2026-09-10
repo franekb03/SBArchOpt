@@ -41,7 +41,7 @@ class StochasticRosenbrock(StochasticArchOptProblem):
     """
 
     def __init__(self, n_var=2, mean=1., std=.05, n=100, seed=42,
-                 uq_method: UQMethod = None, obj_measure: List[RobustMeasure] = None):
+                 uq_method: UQMethod = None, obj_scalar: List[Scalarization] = None):
         if n_var < 2:
             raise ValueError('Need at least 2 design variables')
         self.mean = mean
@@ -51,22 +51,23 @@ class StochasticRosenbrock(StochasticArchOptProblem):
         # The problem and its UQ method must be defined over the same parameter space; when a method is supplied
         # it already carries the space it was built over, so take that one rather than building a second
         if uq_method is None:
-            param_space = self.get_parameter_space(n_var, mean=mean, std=std)
-            uq_method = MonteCarlo(param_space, n_evaluations=n, seed=seed)
+            uq_method = MonteCarlo(n_evaluations=n, seed=seed)
 
         super().__init__(
             [Real(bounds=(-2.048, 2.048)) for _ in range(n_var)],
+            param_space=self.get_parameter_space(n_var, mean, std),
             uq_method=uq_method,
-            n_obj=1, obj_measure=obj_measure,
+            n_obj=1, obj_scalar=obj_scalar
         )
 
     @staticmethod
     def get_parameter_space(n_var=2, mean=1., std=.05) -> StochasticParameterSpace:
         """The uncertain valley location: one parameter per Rosenbrock term. Build this first if you want to
         construct the UQ method yourself, since a method is defined over a parameter space."""
-        param_space = StochasticParameterSpace()
+        parameters = []
         for i in range(n_var-1):
-            param_space.add_parameter(InputParameter(f'u{i}', ot.Normal(mean, std)))
+            parameters.append(StochasticParameter(f'u{i}', ot.Normal(mean, std)))
+        param_space = StochasticParameterSpace(parameters)
         return param_space
 
     def _is_conditionally_active(self) -> List[bool]:

@@ -22,18 +22,19 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from typing import List, Optional, Union
+from typing import List, Optional, Dict
 
 import openturns as ot
 import numpy as np
 
-__all__ = ['RobustMeasure', 'Mean', 'Margin', 'Quantile', 'InputParameter', 'StochasticParameterSpace',
+__all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
            'StochasticOutput', 'StochasticResults', 'UQMethod', 'MonteCarlo', 'PolynomialChaos']
 
 
-class RobustMeasure:
+
+class Scalarization:
     """
-    Parent class for all robust measures etc. Margin, Mean, Quantile
+    Parent class for all robust scalars etc. Margin, Mean, Quantile
     """
 
     def reduce(self, samples: ot.Sample) -> float:
@@ -41,13 +42,13 @@ class RobustMeasure:
         raise NotImplementedError
 
 
-class Mean(RobustMeasure):
+class Mean(Scalarization):
     """The expected value of the response"""
 
     def reduce(self, samples: ot.Sample) -> float:
         return float(samples.computeMean()[0])
 
-class Margin(RobustMeasure):
+class Margin(Scalarization):
     """Assumes the response is Gaussian"""
 
     def __init__(self, k: float = 1.645, direction: int =-1):
@@ -57,7 +58,7 @@ class Margin(RobustMeasure):
     def reduce(self, samples: ot.Sample) -> float:
         return float(samples.computeMean()[0] - self.k * np.sign(self.direction) * samples.computeStandardDeviation()[0])
 
-class Quantile(RobustMeasure):
+class Quantile(Scalarization):
     """The q quantile of the response for arbitrary distribution"""
 
     def __init__(self, q: float = 0.95):
@@ -69,50 +70,39 @@ class Quantile(RobustMeasure):
         return float(samples.computeQuantile(self.q)[0])
 
 
-class InputParameter:
-    """An input parameter used to evaluate architecture objectives or constraints. Supports deterministic and stochastic parameters."""
+class StochasticParameter:
+    """A stochastic parameter used to evaluate architecture objectives or constraints."""
 
-    def __init__(self, name, value: Union[ot.DistributionImplementation, float]):
+    def __init__(self, name, value: ot.DistributionImplementation):
         self.name = name
-
-        if not isinstance(value, (ot.DistributionImplementation, ot.Distribution)):
-            value = float(value)
         self.value = value
 
-    def mean(self) -> float:
-        if isinstance(self.value, float):
-            return self.value
-        return self.value.getMean()[0]
-
-    def std(self) -> float:
-        if isinstance(self.value, float):
-            return 0.0
-        return self.value.getStandardDeviation()[0]
+    # def mean(self) -> float:
+    #     return self.value.getMean()[0]
+    #
+    # def std(self) -> float:
+    #     if isinstance(self.value, float):
+    #         return 0.0
+    #     return self.value.getStandardDeviation()[0]
 
 
 class StochasticParameterSpace:
     """The joint distribution of all stochastic parameters of a problem."""
 
-    def __init__(self):
+    def __init__(self, parameters: List[StochasticParameter]):
         self._sample = None
-        self.parameters: List[InputParameter] = []
-        self.stochastic_parameters: List[InputParameter] = []
-        self.deterministic_parameters: List[InputParameter] = []
+        self.parameters = parameters
 
-    def add_parameter(self, parameter: InputParameter):
-        self.parameters.append(parameter)
-        if not isinstance(parameter.value, float):
-            self.stochastic_parameters.append(parameter)
-        else:
-            self.deterministic_parameters.append(parameter)
+    # def add_parameter(self, parameter: StochasticParameter):
+    #     self.parameters.append(parameter)
+    #     if not isinstance(parameter.value, float):
+    #         self.stochastic_parameters.append(parameter)
+    #     else:
+    #         self.deterministic_parameters.append(parameter)
 
     @property
     def n_parameters(self) -> int:
         return len(self.parameters)
-
-    @property
-    def n_stochastic_parameters(self) -> int:
-        return len(self.stochastic_parameters)
 
     @property
     def parameter_names(self) -> List[str]:
@@ -121,33 +111,35 @@ class StochasticParameterSpace:
     @property
     def joint_dist(self) -> ot.JointDistribution:
         """ Joint distribution of independent variables is chosen """
-        return ot.JointDistribution([parameter.value for parameter in self.stochastic_parameters],
-                                    ot.IndependentCopula(self.n_stochastic_parameters))
+        return ot.JointDistribution([parameter.value for parameter in self.parameters],
+                                    ot.IndependentCopula(self.n_parameters))
+
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
-        """ Draw n samples of the stochastic parameters; returns an n x n_stochastic_parameters matrix """
+        """ Draw n samples of the stochastic parameters; returns an n x n_parameters matrix """
         result = self.joint_dist.getSample(n_samples)
         self._sample = result
         return np.array(result)
 
     def get_lhs_samples(self, n_samples: int) -> np.ndarray:
-        """ Draw n samples of the stochastic parameters; returns an n x n_stochastic_parameters matrix built with LHS"""
+        """ Draw n samples of the stochastic parameters; returns an n x n_parameters matrix built with LHS"""
         lhs = ot.LHSExperiment(self.joint_dist, n_samples)
         result = lhs.generate()
         self._sample = result
         return np.array(result)
 
-    def include_deterministic_values(self, samples: np.ndarray) -> np.ndarray:
-        """Add missing deterministic parameters to the sample."""
-        extended_samples = np.zeros((samples.shape[0], self.n_parameters))
-        n_d = 0
-        for i, parameter in enumerate(self.parameters):
-            if isinstance(parameter.value, float):
-                extended_samples[:, i] = parameter.value
-                n_d += 1
-            else:
-                extended_samples[:, i] = samples[:, i-n_d]
-        return extended_samples
+    # def include_deterministic_values(self, samples: np.ndarray) -> np.ndarray:
+    #     """Add missing deterministic parameters to the sample."""
+    #     extended_samples = np.zeros((samples.shape[0], self.n_parameters))
+    #     n_d = 0
+    #     for i, parameter in enumerate(self.parameters):
+    #         if isinstance(parameter.value, float):
+    #             extended_samples[:, i] = parameter.value
+    #             n_d += 1
+    #         else:
+    #             extended_samples[:, i] = samples[:, i-n_d]
+    #     return extended_samples
+
 
 
 class StochasticOutput:
@@ -177,41 +169,28 @@ class StochasticOutput:
         arr = self.to_numpy()
         return float(np.mean(arr > threshold))
 
-    def margin(self, k: float = 1.645) -> float:
+    def margin(self, k: float = 1.645, direction: int =-1) -> float:
         """mean + k*sigma - the Gaussian-assumption margin formulation."""
-        return self.mean() + k * self.std()
+        return self.mean() - np.sign(direction) * k * self.std()
 
-    def to_distribution(self) -> ot.DistributionImplementation:
+    def to_distribution(self) -> ot.Distribution:
         """Fit a continuous distribution if you need PDF/CDF rather than raw samples."""
         return ot.KernelSmoothing().build(self.output_samples)
 
     def to_numpy(self) -> np.ndarray:
         return np.array(self.output_samples).flatten()
 
-    def reduce(self, measure: RobustMeasure, nan_policy: str = 'propagate') -> float:
+    def reduce(self, scalar: Scalarization) -> float:
         """
-        Reduce the sampled values to the single value the optimizer sees, by applying the given measure.
-
-        `nan_policy` controls what happens when some samples failed to evaluate (NaN, i.e. hidden constraints):
-        - 'propagate': any failed sample makes the whole design point fail (the value becomes NaN). This is the
-          conservative default and matches how SBArchOpt treats failed evaluations elsewhere.
-        - 'omit': reduce over the samples that did evaluate; only an entirely failed design point becomes NaN.
+        Reduce the sampled values to the single value the optimizer sees, by applying the given scalar.
         """
         values = self.to_numpy()
 
-        if nan_policy == 'propagate':
-            if values.size == 0 or not np.all(np.isfinite(values)):
-                return np.nan
-            samples = self.output_samples
-        elif nan_policy == 'omit':
-            finite = values[np.isfinite(values)]
-            if finite.size == 0:
-                return np.nan
-            samples = ot.Sample(finite.reshape((-1, 1)))
-        else:
-            raise ValueError(f'Unknown nan_policy: {nan_policy!r} (expected "propagate" or "omit")')
+        if values.size == 0 or not np.all(np.isfinite(values)):
+            return np.nan
+        samples = self.output_samples
 
-        return measure.reduce(samples)
+        return scalar.reduce(samples)
 
 
 class StochasticResults:
@@ -232,48 +211,48 @@ class UQMethod:
     Base class for an uncertainty propagation method.
     """
 
-    def __init__(self, param_space: StochasticParameterSpace, n_evaluations: int, seed: int = None):
-        if param_space is None or param_space.n_parameters == 0:
-            raise ValueError('A UQ method needs a parameter space with at least one parameter to propagate')
+    def __init__(self, n_evaluations: int, seed: int = None):
         if n_evaluations is None:
             raise ValueError('n_evaluations must be specified: it is the number of expensive evaluations '
                              'per design point')
-        self.param_space = param_space
         self.n_evaluations = n_evaluations
         self.seed = seed
 
         self._samples: Optional[np.ndarray] = None
 
-    @property
-    def n_samples(self) -> int:
-        """Number of parameter samples this method evaluates per design point"""
-        return self.n_evaluations
-
-    def get_samples(self) -> np.ndarray:
-        if self.param_space is None:
+    def get_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
+        if param_space is None:
             raise ValueError('No parameter space to sample')
         if self._samples is None:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
-            self._samples = self._draw_samples()
+            self._samples = self._draw_samples(param_space)
         return self._samples
 
-    def _draw_samples(self) -> np.ndarray:
+    def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
         """Draw the design of experiments in the parameter space; override to use a different design"""
-        return self.param_space.get_random_samples(self.n_evaluations)
+        return param_space.get_random_samples(self.n_evaluations)
 
     def resample(self):
         """Draw a new design on the next evaluation"""
         self._samples = None
 
-    def check_results(self, results: np.ndarray):
+    def _check_results(self, results: np.ndarray):
         """The results of one design point must have one row per evaluated parameter sample"""
         if results.ndim != 2:
             raise ValueError(f'Expected a 2D (n_samples x n_outputs) results matrix, got {results.ndim}D')
-        if results.shape[0] != self.n_samples:
-            raise ValueError(f'Expected {self.n_samples} response rows, got {results.shape[0]}')
+        if results.shape[0] != self.n_evaluations:
+            raise ValueError(f'Expected {self.n_evaluations} response rows, got {results.shape[0]}')
 
-    def process_results(self, results: np.ndarray) -> StochasticResults:
+    def get_dictionary(self, param_space: StochasticParameterSpace, i_realization: int) -> Optional[Dict[str, float]]:
+        if self._samples is None:
+            return None
+        samples = {}
+        for j, parameter in enumerate(param_space.parameters):
+            samples[parameter.name] = self._samples[i_realization, j]
+        return samples
+
+    def process_results(self, results: np.ndarray, **kwargs) -> StochasticResults:
         """
         Turn the responses of ONE design point (an n_samples x (n_obj+n_ieq_constr+n_eq_constr) matrix) into the
         stochastic result object that contains list of stochastic outputs.
@@ -286,14 +265,17 @@ class MonteCarlo(UQMethod):
     Monte Carlo uncertainty propagation
     """
 
-    def _draw_samples(self) -> np.ndarray:
+    def __init__(self, n_evaluations: int = 100, seed: int = 42):
+        super().__init__(n_evaluations, seed)
+
+    def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
         # Draw samples with LHS method
-        samples = self.param_space.get_lhs_samples(self.n_evaluations)
+        samples = param_space.get_lhs_samples(self.n_evaluations)
         return samples
 
-    def process_results(self, results: np.ndarray) -> StochasticResults:
+    def process_results(self, results: np.ndarray, **kwargs) -> StochasticResults:
         results = np.asarray(results, dtype=float)
-        self.check_results(results)
+        self._check_results(results)
 
         sample = ot.Sample(results)
         outputs = [StochasticOutput.from_results(sample, i) for i in range(results.shape[1])]
@@ -313,46 +295,40 @@ class PolynomialChaos(UQMethod):
 
     The fitted `ot.FunctionalChaosResult` of each response is kept on the `StochasticResult` (`method_result`), so
     Sobol sensitivity indices are available for free through `ot.FunctionalChaosSobolIndices`.
-
-    Note that a response containing failed evaluations (NaN) cannot be fitted; those responses fall back to the raw
-    samples, so the problem's `nan_policy` decides what happens to that design point as usual.
     """
 
-    def __init__(self, param_space: StochasticParameterSpace, n_evaluations: int, seed: int = None, degree: int = 3, n_metamodel_samples: int = 10000):
+    def __init__(self, n_evaluations: int, seed: int = None, degree: int = 3, n_metamodel_samples: int = 10000):
         self.degree = degree
         self.n_metamodel_samples = n_metamodel_samples
         self._metamodel_input: Optional[ot.Sample] = None
-        super().__init__(param_space, n_evaluations, seed)
+        super().__init__(n_evaluations, seed)
 
-        self._validate()
-
-    @property
-    def n_terms(self) -> int:
+    def n_terms(self, param_space: StochasticParameterSpace) -> int:
         """Number of terms in the expansion, i.e. the minimum number of samples needed to fit it"""
-        enumerate_function = ot.LinearEnumerateFunction(self.param_space.n_stochastic_parameters)
+        enumerate_function = ot.LinearEnumerateFunction(param_space.n_parameters)
         return int(enumerate_function.getStrataCumulatedCardinal(self.degree))
 
-    def _validate(self):
+    def _validate(self, param_space: StochasticParameterSpace):
         # Needs the parameter space, since the number of terms depends on the number of parameters
-        n_terms = self.n_terms
+        n_terms = self.n_terms(param_space)
         if self.n_evaluations < n_terms:
-            raise ValueError(f'A degree-{self.degree} expansion in {self.param_space.n_parameters} '
+            raise ValueError(f'A degree-{self.degree} expansion in {param_space.n_parameters} '
                              f'parameters has {n_terms} terms, so it needs at least that many samples to fit: '
                              f'n_evaluations = {self.n_evaluations}')
 
-    def _draw_samples(self) -> np.ndarray:
-        self._validate()
+    def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
+        self._validate(param_space)
         # Draw samples with LHS method
-        samples = self.param_space.get_lhs_samples(self.n_evaluations)
+        samples = param_space.get_lhs_samples(self.n_evaluations)
         return samples
 
-    def _get_metamodel_input(self) -> ot.Sample:
+    def _get_metamodel_input(self, param_space: StochasticParameterSpace) -> ot.Sample:
         if self._metamodel_input is None:
-            self._metamodel_input = self.param_space.joint_dist.getSample(self.n_metamodel_samples)
+            self._metamodel_input = param_space.joint_dist.getSample(self.n_metamodel_samples)
         return self._metamodel_input
 
-    def _build_algorithm(self, input_sample: ot.Sample, output_sample: ot.Sample) -> ot.FunctionalChaosAlgorithm:
-        distribution = self.param_space.joint_dist
+    def _build_algorithm(self, param_space: StochasticParameterSpace, input_sample: ot.Sample, output_sample: ot.Sample) -> ot.FunctionalChaosAlgorithm:
+        distribution = param_space.joint_dist
         dimension = distribution.getDimension()
 
         polynomials = [ot.StandardDistributionPolynomialFactory(distribution.getMarginal(i))
@@ -360,17 +336,19 @@ class PolynomialChaos(UQMethod):
         enumerate_function = ot.LinearEnumerateFunction(dimension)
         basis = ot.OrthogonalProductPolynomialFactory(polynomials, enumerate_function)
 
-        adaptive_strategy = ot.FixedStrategy(basis, self.n_terms)
+        adaptive_strategy = ot.FixedStrategy(basis, self.n_terms(param_space))
         projection_strategy = ot.LeastSquaresStrategy()
         return ot.FunctionalChaosAlgorithm(input_sample, output_sample, distribution,
                                            adaptive_strategy, projection_strategy)
 
-    def process_results(self, results: np.ndarray) -> StochasticResults:
+    def process_results(self, results: np.ndarray, **kwargs) -> StochasticResults:
         results = np.asarray(results, dtype=float)
-        self.check_results(results)
+        self._check_results(results)
 
-        input_sample = ot.Sample(self.get_samples())
-        metamodel_input = self._get_metamodel_input()
+        param_space = kwargs['param_space']
+
+        input_sample = ot.Sample(self.get_samples(param_space))
+        metamodel_input = self._get_metamodel_input(param_space)
 
         outputs, chaos_results = [], []
         for i_out in range(results.shape[1]):
@@ -383,12 +361,11 @@ class PolynomialChaos(UQMethod):
                 chaos_results.append(None)
 
             else:
-                algorithm = self._build_algorithm(input_sample, ot.Sample(values.reshape((-1, 1))))
+                algorithm = self._build_algorithm(param_space, input_sample, ot.Sample(values.reshape((-1, 1))))
                 algorithm.run()
                 chaos_result = algorithm.getResult()
                 chaos_results.append(chaos_result)
                 samples = chaos_result.getMetaModel()(metamodel_input)
 
             outputs.append(StochasticOutput(samples))
-
         return StochasticResults(outputs, method_result=chaos_results)
