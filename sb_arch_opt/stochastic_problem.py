@@ -117,7 +117,7 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         # Evaluate the stochastic result for all the evaluated design vectors and samples
         self.stochastic_results = []
         for x_i in range(n_x):
-            results = self.uq_method.process_results(np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1))
+            results = self.uq_method.process_results(np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1), self.param_space)
             self.stochastic_results.append(results)
 
             # Reduce the sampled responses of each design point to the values the optimizer sees

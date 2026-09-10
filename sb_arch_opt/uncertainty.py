@@ -252,7 +252,7 @@ class UQMethod:
             samples[parameter.name] = self._samples[i_realization, j]
         return samples
 
-    def process_results(self, results: np.ndarray, **kwargs) -> StochasticResults:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> StochasticResults:
         """
         Turn the responses of ONE design point (an n_samples x (n_obj+n_ieq_constr+n_eq_constr) matrix) into the
         stochastic result object that contains list of stochastic outputs.
@@ -273,7 +273,7 @@ class MonteCarlo(UQMethod):
         samples = param_space.get_lhs_samples(self.n_evaluations)
         return samples
 
-    def process_results(self, results: np.ndarray, **kwargs) -> StochasticResults:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace = None) -> StochasticResults:
         results = np.asarray(results, dtype=float)
         self._check_results(results)
 
@@ -341,11 +341,9 @@ class PolynomialChaos(UQMethod):
         return ot.FunctionalChaosAlgorithm(input_sample, output_sample, distribution,
                                            adaptive_strategy, projection_strategy)
 
-    def process_results(self, results: np.ndarray, **kwargs) -> StochasticResults:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> StochasticResults:
         results = np.asarray(results, dtype=float)
         self._check_results(results)
-
-        param_space = kwargs['param_space']
 
         input_sample = ot.Sample(self.get_samples(param_space))
         metamodel_input = self._get_metamodel_input(param_space)
