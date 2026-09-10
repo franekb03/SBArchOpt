@@ -75,10 +75,10 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             return [Mean() for _ in range(n)]
 
         if len(scalars) != n:
-            raise ValueError(f'{type(Scalarization)} should have {n} entries: {len(scalars)}')
+            raise ValueError(f'scalars should have {n} Scalarization entries, got {len(scalars)}')
         for scalar in scalars:
             if not isinstance(scalar, Scalarization):
-                raise ValueError(f'{type(Scalarization)} should contain Scalarization instances, got: {scalar!r}')
+                raise ValueError(f'scalars should contain Scalarization instances, got: {scalar!r}')
         return list(scalars)
 
     def _evaluate(self, x, out, *args, **kwargs):
