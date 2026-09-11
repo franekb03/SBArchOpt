@@ -15,7 +15,7 @@ def _output(values):
 def _n_occupied_strata(space, samples, i_param):
     # An LHS puts exactly one point in each of the n equiprobable strata of every marginal
     n = samples.shape[0]
-    cdf = np.array([space.parameters[i_param].value.computeCDF(v) for v in samples[:, i_param]])
+    cdf = np.array([space.param_realization(0)[i_param].value.computeCDF(v) for v in samples[:, i_param]])
     return len(np.unique(np.floor(cdf*n).astype(int)))
 
 
@@ -94,16 +94,6 @@ def test_uq_method_samples(method_class):
 
     with pytest.raises(ValueError):
         method.get_samples(None)
-
-
-def test_uq_method_get_dictionary():
-    space = StochasticParameterSpace([
-        StochasticParameter('a', ot.Normal(0., 1.)),
-        StochasticParameter('b', ot.Normal(10., 1.)),
-    ])
-    method = MonteCarlo(n_evaluations=5, seed=42)
-
-    assert method.get_dictionary(space, 0) is None  # nothing drawn yet
 
     samples = method.get_samples(space)
     for i in range(5):

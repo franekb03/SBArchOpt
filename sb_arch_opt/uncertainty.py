@@ -76,6 +76,14 @@ class StochasticParameter:
     def __init__(self, name, value: ot.DistributionImplementation):
         self.name = name
         self.value = value
+        self._sample = None
+
+    def set_sample(self, value: float):
+        self._sample = value
+
+    @property
+    def sample_realization(self) -> float:
+        return self._sample
 
     def mean(self) -> float:
         return self.value.getMean()[0]
@@ -88,22 +96,26 @@ class StochasticParameterSpace:
 
     def __init__(self, parameters: List[StochasticParameter]):
         self._sample = None
-        self.parameters = parameters
+        self._parameters = parameters
 
     @property
     def n_parameters(self) -> int:
-        return len(self.parameters)
+        return len(self._parameters)
 
     @property
     def parameter_names(self) -> List[str]:
-        return [parameter.name for parameter in self.parameters]
+        return [parameter.name for parameter in self._parameters]
 
     @property
     def joint_dist(self) -> ot.JointDistribution:
         """ Joint distribution of independent variables is chosen """
-        return ot.JointDistribution([parameter.value for parameter in self.parameters],
+        return ot.JointDistribution([parameter.value for parameter in self._parameters],
                                     ot.IndependentCopula(self.n_parameters))
 
+    def param_realization(self, i_realization) -> List[StochasticParameter]:
+        for j, param in enumerate(self._parameters):
+            param.set_sample(self._sample[i_realization, j])
+        return self._parameters
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
         """ Draw n samples of the stochastic parameters; returns an n x n_parameters matrix """
@@ -117,18 +129,6 @@ class StochasticParameterSpace:
         result = lhs.generate()
         self._sample = result
         return np.array(result)
-
-    # def include_deterministic_values(self, samples: np.ndarray) -> np.ndarray:
-    #     """Add missing deterministic parameters to the sample."""
-    #     extended_samples = np.zeros((samples.shape[0], self.n_parameters))
-    #     n_d = 0
-    #     for i, parameter in enumerate(self.parameters):
-    #         if isinstance(parameter.value, float):
-    #             extended_samples[:, i] = parameter.value
-    #             n_d += 1
-    #         else:
-    #             extended_samples[:, i] = samples[:, i-n_d]
-    #     return extended_samples
 
 
 
