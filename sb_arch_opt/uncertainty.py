@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from typing import List, Optional, Dict
+from typing import List, Optional
 
 import openturns as ot
 import numpy as np
@@ -226,14 +226,6 @@ class UQMethod:
     def resample(self):
         """Draw a new design on the next evaluation"""
         self._samples = None
-
-    def get_dictionary(self, param_space: StochasticParameterSpace, i_realization: int) -> Optional[Dict[str, float]]:
-        if self._samples is None:
-            return None
-        samples = {}
-        for j, parameter in enumerate(param_space.parameters):
-            samples[parameter.name] = self._samples[i_realization, j]
-        return samples
 
     def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> StochasticResults:
         """
