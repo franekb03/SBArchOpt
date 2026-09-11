@@ -227,14 +227,6 @@ class UQMethod:
         """Draw a new design on the next evaluation"""
         self._samples = None
 
-    def get_dictionary(self, param_space: StochasticParameterSpace, i_realization: int) -> Optional[Dict[str, float]]:
-        if self._samples is None:
-            return None
-        samples = {}
-        for j, parameter in enumerate(param_space.parameters):
-            samples[parameter.name] = self._samples[i_realization, j]
-        return samples
-
     def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> StochasticResults:
         """
         Turn the responses of ONE design point (an n_samples x (n_obj+n_ieq_constr+n_eq_constr) matrix) into the

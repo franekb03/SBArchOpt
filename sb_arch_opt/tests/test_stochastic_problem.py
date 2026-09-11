@@ -15,7 +15,8 @@ def _output(values):
 def _n_occupied_strata(space, samples, i_param):
     # An LHS puts exactly one point in each of the n equiprobable strata of every marginal
     n = samples.shape[0]
-    cdf = np.array([space.param_realization(0)[i_param].value.computeCDF(v) for v in samples[:, i_param]])
+    marginal = space.joint_dist.getMarginal(i_param)
+    cdf = np.array([marginal.computeCDF(v) for v in samples[:, i_param]])
     return len(np.unique(np.floor(cdf*n).astype(int)))
 
 
@@ -95,17 +96,43 @@ def test_uq_method_samples(method_class):
     with pytest.raises(ValueError):
         method.get_samples(None)
 
-    samples = method.get_samples(space)
-    for i in range(5):
-        values = method.get_dictionary(space, i)
-        assert list(values) == ['a', 'b']
-        assert values['a'] == samples[i, 0]
-        assert values['b'] == samples[i, 1]
-
 
 def test_uq_method_requires_n_evaluations():
     with pytest.raises(ValueError):
         MonteCarlo(n_evaluations=None)
+
+
+def test_parameter_realization():
+    space = StochasticParameterSpace([
+        StochasticParameter('a', ot.Normal(0., 1.)),
+        StochasticParameter('b', ot.Uniform(2., 4.)),
+    ])
+    samples = MonteCarlo(n_evaluations=5, seed=42).get_samples(space)
+
+    for i in range(5):
+        parameters = space.param_realization(i)
+
+        assert [parameter.name for parameter in parameters] == ['a', 'b']
+        # Column j of the design belongs to parameter j
+        assert [parameter.sample_realization for parameter in parameters] == pytest.approx(list(samples[i, :]))
+        assert all(isinstance(parameter.sample_realization, float) for parameter in parameters)
+
+    # The parameters keep their distribution alongside the realization
+    a, b = space.param_realization(0)
+    assert (a.mean(), a.std()) == pytest.approx((0., 1.))
+    assert (b.mean(), b.std()) == pytest.approx((3., 2./np.sqrt(12.)))
+
+
+def test_process_results():
+    space = make_space(ot.Normal(0., 1.))
+    method = MonteCarlo(n_evaluations=3, seed=42)
+
+    result = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]), space)
+
+    assert isinstance(result, StochasticResults)
+    assert len(result.outputs) == 3  # one output per response column
+    assert [output.mean() for output in result.outputs] == pytest.approx([2., 11., 21.])
+    assert result.method_result is None  # Monte Carlo has nothing beyond the samples
 
 def test_user_only_implements_arch_evaluate_sample(stochastic_problem):
     out = stochastic_problem.evaluate(np.array([[1., 0.], [0., 0.]]), return_as_dictionary=True)
