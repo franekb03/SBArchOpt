@@ -95,7 +95,6 @@ class StochasticParameterSpace:
     """The joint distribution of all stochastic parameters of a problem."""
 
     def __init__(self, parameters: List[StochasticParameter]):
-        self._sample = None
         self._parameters = parameters
 
     @property
@@ -112,22 +111,20 @@ class StochasticParameterSpace:
         return ot.JointDistribution([parameter.value for parameter in self._parameters],
                                     ot.IndependentCopula(self.n_parameters))
 
-    def param_realization(self, i_realization) -> List[StochasticParameter]:
+    def param_realization(self, samples: np.ndarray, i_realization: int) -> List[StochasticParameter]:
         for j, param in enumerate(self._parameters):
-            param.set_sample(self._sample[i_realization, j])
+            param.set_sample(samples[i_realization, j])
         return self._parameters
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
         """ Draw n samples of the stochastic parameters; returns an n x n_parameters matrix """
         result = self.joint_dist.getSample(n_samples)
-        self._sample = result
         return np.array(result)
 
     def get_lhs_samples(self, n_samples: int) -> np.ndarray:
         """ Draw n samples of the stochastic parameters; returns an n x n_parameters matrix built with LHS"""
         lhs = ot.LHSExperiment(self.joint_dist, n_samples)
         result = lhs.generate()
-        self._sample = result
         return np.array(result)
 
 

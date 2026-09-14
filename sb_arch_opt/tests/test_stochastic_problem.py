@@ -110,7 +110,7 @@ def test_parameter_realization():
     samples = MonteCarlo(n_evaluations=5, seed=42).get_samples(space)
 
     for i in range(5):
-        parameters = space.param_realization(i)
+        parameters = space.param_realization(samples, i)
 
         assert [parameter.name for parameter in parameters] == ['a', 'b']
         # Column j of the design belongs to parameter j
@@ -118,7 +118,7 @@ def test_parameter_realization():
         assert all(isinstance(parameter.sample_realization, float) for parameter in parameters)
 
     # The parameters keep their distribution alongside the realization
-    a, b = space.param_realization(0)
+    a, b = space.param_realization(samples, 0)
     assert (a.mean(), a.std()) == pytest.approx((0., 1.))
     assert (b.mean(), b.std()) == pytest.approx((3., 2./np.sqrt(12.)))
 
