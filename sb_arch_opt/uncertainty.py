@@ -85,12 +85,6 @@ class StochasticParameter:
     def sample_realization(self) -> float:
         return self._sample
 
-    def mean(self) -> float:
-        return self.value.getMean()[0]
-
-    def std(self) -> float:
-        return self.value.getStandardDeviation()[0]
-
 class StochasticParameterSpace:
     """The joint distribution of all stochastic parameters of a problem."""
 
@@ -140,12 +134,15 @@ class StochasticOutput:
         """Extract one response's column from the full (n_samples, n_outputs) results of a single design point."""
         return cls(output_samples=results.getMarginal(index))
 
+    @property
     def mean(self) -> float:
         return self.output_samples.computeMean()[0]
 
+    @property
     def std(self) -> float:
         return self.output_samples.computeStandardDeviation()[0]
 
+    @property
     def var(self) -> float:
         return self.output_samples.computeVariance()[0]
 
@@ -158,8 +155,9 @@ class StochasticOutput:
 
     def margin(self, k: float = 1.645, direction: int =-1) -> float:
         """mean + k*sigma - the Gaussian-assumption margin formulation."""
-        return self.mean() - np.sign(direction) * k * self.std()
+        return self.mean - np.sign(direction) * k * self.std
 
+    @property
     def to_distribution(self) -> ot.Distribution:
         """Fit a continuous distribution if you need PDF/CDF rather than raw samples."""
         return ot.KernelSmoothing().build(self.output_samples)
@@ -178,6 +176,12 @@ class StochasticOutput:
         samples = self.output_samples
 
         return scalar.reduce(samples)
+
+    def __str__(self):
+        if self.std / self.mean < 1e-6:
+            return f'{self.mean:.4g}'
+        return f"(mean = {self.mean:.4g}, sigma = {self.std:.4g})"
+
 
 
 class StochasticResults:
