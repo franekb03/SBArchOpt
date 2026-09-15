@@ -31,6 +31,7 @@ nav:
   - 'Test Problems': 'test_problems.md'
   - API Reference:
     - Problem Definition: 'api/problem.md'
+    - Robust Optimization: 'api/robust.md'
     - pymoo: 'api/pymoo.md'
     - ArchSBO: 'api/arch_sbo.md'
     - 'BoTorch (Ax)': 'api/botorch.md'
@@ -38,6 +39,7 @@ nav:
     - 'HEBO': 'api/hebo.md'
     - 'SEGOMOE': 'api/segomoe.md'
     - 'SMARTy': 'api/smarty.md'
+    - 'Uncertainty Quantification': 'api/uqmethod.md'
 
 markdown_extensions:
   - pymdownx.highlight:

@@ -34,22 +34,35 @@ __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter',
 
 class Scalarization:
     """
-    Parent class for all robust scalars etc. Margin, Mean, Quantile
+    Parent class for all types of robust optimization problem. Do not instantiate this class directly, use its subclasses:
+
+    - Mean
+    - Margin
+    - Quantile
     """
 
     def reduce(self, samples: ot.Sample) -> float:
-        """Reduce an (n_samples x 1) sample of one response to a single value"""
+        """Reduce an (n_samples x 1) sample of one response to a single value that the optimizer sees based on the optimization problem type."""
         raise NotImplementedError
 
 
 class Mean(Scalarization):
-    """The expected value of the response"""
+    """Minimize the expectation of the objective or constraint function for example min(E[F(x)])"""
 
     def reduce(self, samples: ot.Sample) -> float:
         return float(samples.computeMean()[0])
 
 class Margin(Scalarization):
-    """Assumes the response is Gaussian"""
+    """
+    Gaussian output distribution expected. Minimize for the objective or constraint function for a given
+    confidence interval.
+    --> min(E[F(x)] + k*sigma[F(x)]); The default k=1.645 is the one-sided 95% interval of a normal distribution.
+
+    Requires:
+
+    - :param k: coverage factor, i.e. the number of standard deviations added to the mean (default 1.645 covers 95% of a normal response on one side; 1, 2 and 3 give 84.1%, 97.7% and 99.9%).
+    - :param direction: -1 for minimizing and +1 for maximizing.
+    """
 
     def __init__(self, k: float = 1.645, direction: int =-1):
         self.k = k
@@ -59,7 +72,15 @@ class Margin(Scalarization):
         return float(samples.computeMean()[0] - self.k * np.sign(self.direction) * samples.computeStandardDeviation()[0])
 
 class Quantile(Scalarization):
-    """The q quantile of the response for arbitrary distribution"""
+    """
+    Makes no distributional assumption. Minimize the q quantile of the objective or constraint function --> min(F_q(x)), with q=0.95 by default.
+
+    Requires:
+
+    :param q: quantile level in [0, 1], i.e. the probability that the response falls below the returned value (default 0.95);
+    unlike Margin this assumes nothing about the distribution shape, since the quantile is taken from the samples directly.
+
+    """
 
     def __init__(self, q: float = 0.95):
         if not 0. <= q <= 1.:
@@ -71,7 +92,16 @@ class Quantile(Scalarization):
 
 
 class StochasticParameter:
-    """A stochastic parameter used to evaluate architecture objectives or constraints."""
+    """
+     A stochastic parameter used to evaluate architecture objectives or constraints.
+
+     The parameter carries two distinct things. `value` defines the parameter distribution defined by OpenTurns object.
+     `sample` is one realization of it, written by `StochasticParameterSpace.param_realization` before each
+     evaluation and overwritten on the next one.
+
+     :param name: identifies the parameter
+     :param value: OpenTurns distribution object
+     """
 
     def __init__(self, name, value: ot.DistributionImplementation):
         self.name = name
@@ -80,6 +110,9 @@ class StochasticParameter:
 
     @property
     def sample(self) -> float:
+        """
+        The parameter realization of it, written by `StochasticParameterSpace.param_realization`
+        """
         return self._sample
 
     @sample.setter
@@ -90,37 +123,50 @@ class StochasticParameter:
 
 
 class StochasticParameterSpace:
-    """The joint distribution of all stochastic parameters of a problem."""
+    """
+     The joint distribution of all stochastic parameters of a problem.
+
+     The parameters are assumed to be independent.
+
+     The space does not store the sampled parameters as its attribute. The samples are processed by the chosen UQ method.
+
+     :param parameters: the stochastic parameters
+     """
 
     def __init__(self, parameters: List[StochasticParameter]):
         self._parameters = parameters
 
     @property
     def n_parameters(self) -> int:
+        """Number of stochastic parameters"""
         return len(self._parameters)
 
     @property
     def parameter_names(self) -> List[str]:
+        """List of stochastic parameter names"""
         return [parameter.name for parameter in self._parameters]
 
     @property
     def joint_dist(self) -> ot.JointDistribution:
-        """ Joint distribution of independent variables is chosen """
+        """Joint distribution of independent parameters"""
         return ot.JointDistribution([parameter.value for parameter in self._parameters],
                                     ot.IndependentCopula(self.n_parameters))
 
     def param_realization(self, samples: np.ndarray, i_realization: int) -> List[StochasticParameter]:
+        """
+        Return `i_realization` of `samples` (n_samples x n_parameters) as a list of stochastic parameters.
+        """
         for j, param in enumerate(self._parameters):
             param.sample = samples[i_realization, j]
         return self._parameters
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
-        """ Draw n samples of the stochastic parameters; returns an n x n_parameters matrix """
+        """Draw n samples of the stochastic parameters; returns an n x n_parameters matrix"""
         result = self.joint_dist.getSample(n_samples)
         return np.array(result)
 
     def get_lhs_samples(self, n_samples: int) -> np.ndarray:
-        """ Draw n samples of the stochastic parameters; returns an n x n_parameters matrix built with LHS"""
+        """Draw n samples of the stochastic parameters; returns an n x n_parameters matrix built with LHS"""
         lhs = ot.LHSExperiment(self.joint_dist, n_samples)
         result = lhs.generate()
         return np.array(result)
@@ -128,7 +174,11 @@ class StochasticParameterSpace:
 
 
 class StochasticOutput:
-    """The sampled values of one response (objective or constraint) for one design point."""
+    """
+    The object representing the stochastic output of a single objective or constraint for a given design point.
+
+    :param output_samples: the output samples computed for the specific objective or constraint.
+    """
 
     def __init__(self, output_samples: ot.Sample):
         self.output_samples = output_samples          # ot.Sample of shape (n, 1)
@@ -163,7 +213,7 @@ class StochasticOutput:
 
     @property
     def to_distribution(self) -> ot.Distribution:
-        """Fit a continuous distribution if you need PDF/CDF rather than raw samples."""
+        """Fit a continuous distribution."""
         return ot.KernelSmoothing().build(self.output_samples)
 
     def to_numpy(self) -> np.ndarray:
@@ -190,9 +240,9 @@ class StochasticOutput:
 
 class StochasticResults:
     """
-    All sampled responses of a single design point.
+    Single object that stores all stochastic objectives or constraints for a given design point.
 
-    `method_result` optionally carries whatever the UQ method produced beyond the samples themselves; for polynomial
+    :param method_result: optionally carries whatever the UQ method produced beyond the samples themselves; for polynomial
     chaos that is the list of `ot.FunctionalChaosResult`s, from which for example Sobol indices can be obtained.
     """
 
@@ -204,7 +254,16 @@ class StochasticResults:
 class UQMethod:
     """
     Base class for an uncertainty propagation method.
+
+    It is responsible for sampling the provided 'param_space' based on the provided number of evaluations and
+    for performing uncertainty quantification study to return a list of StochasticResults for a given design vector.
+
+    Subclass by overriding `_draw_samples` (sampling method) and `process_results` (statistics computation).
+
+    :param n_evaluations: number of expensive evaluations spent per design point
+    :param seed: optional seed the OpenTURNS generator before drawing, so the design is reproducible
     """
+
 
     def __init__(self, n_evaluations: int, seed: int = None):
         if n_evaluations is None:
@@ -216,6 +275,9 @@ class UQMethod:
         self._samples: Optional[np.ndarray] = None
 
     def get_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
+        """
+        Get samples from the joint distribution provided by the param_space.
+        """
         if param_space is None:
             raise ValueError('No parameter space to sample')
         if self._samples is None:
@@ -249,7 +311,7 @@ class MonteCarlo(UQMethod):
         super().__init__(n_evaluations, seed)
 
     def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
-        # Draw samples with LHS method
+        """Draw samples with LHS method"""
         samples = param_space.get_lhs_samples(self.n_evaluations)
         return samples
 
@@ -263,18 +325,15 @@ class MonteCarlo(UQMethod):
 
 class PolynomialChaos(UQMethod):
     """
-    Polynomial chaos expansion (PCE): a surrogate of each response as a function of the uncertain parameters is
-    fitted from n_evaluations evaluations of the expensive model, and the statistics are then taken from that
-    surrogate.
+     Polynomial chaos expansion (PCE): a surrogate model is fitted for each response as a function of the uncertain parameters.
+     The trained model is then sampled with Monte Carlo to compute output statistics.
 
-    The expensive model is evaluated `n_evaluations` times per design point, exactly like Monte Carlo, but the
-    statistics come from `n_metamodel_samples` evaluations of the cheap fitted expansion instead of from the
-    expensive ones. For a response that the expansion represents well this gives far more accurate quantiles and
-    tail statistics for the same number of expensive evaluations.
+     The fitted `ot.FunctionalChaosResult` of each response is kept on the `StochasticResult` (`method_result`) with
+     Sobol sensitivity indices available through `ot.FunctionalChaosSobolIndices`.
 
-    The fitted `ot.FunctionalChaosResult` of each response is kept on the `StochasticResult` (`method_result`), so
-    Sobol sensitivity indices are available for free through `ot.FunctionalChaosSobolIndices`.
-    """
+     :param degree: total degree of the expansion
+     :param n_metamodel_samples: number of cheap evaluations of the trained model used to obtain the statistics
+     """
 
     def __init__(self, n_evaluations: int, seed: int = None, degree: int = 3, n_metamodel_samples: int = 10000):
         self.degree = degree
@@ -288,6 +347,7 @@ class PolynomialChaos(UQMethod):
         return int(enumerate_function.getStrataCumulatedCardinal(self.degree))
 
     def _validate(self, param_space: StochasticParameterSpace):
+        """Check the expansion can be fitted from the budget"""
         n_terms = self.n_terms(param_space)
         if self.n_evaluations < n_terms:
             raise ValueError(f'A degree-{self.degree} expansion in {param_space.n_parameters} '
@@ -295,17 +355,19 @@ class PolynomialChaos(UQMethod):
                              f'n_evaluations = {self.n_evaluations}')
 
     def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
+        """Draw samples with LHS method"""
         self._validate(param_space)
-        # Draw samples with LHS method
         samples = param_space.get_lhs_samples(self.n_evaluations)
         return samples
 
     def _get_metamodel_input(self, param_space: StochasticParameterSpace) -> ot.Sample:
+        """Get samples that used for evaluating the surrogate model"""
         if self._metamodel_input is None:
             self._metamodel_input = param_space.joint_dist.getSample(self.n_metamodel_samples)
         return self._metamodel_input
 
     def _build_algorithm(self, param_space: StochasticParameterSpace, input_sample: ot.Sample, output_sample: ot.Sample) -> ot.FunctionalChaosAlgorithm:
+        """Train surrogate model with the least-squares method"""
         distribution = param_space.joint_dist
         dimension = distribution.getDimension()
 

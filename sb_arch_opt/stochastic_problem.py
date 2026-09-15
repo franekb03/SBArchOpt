@@ -36,7 +36,44 @@ __all__ = ['StochasticArchOptProblem']
 
 class StochasticArchOptProblem(ArchOptProblemBase):
     """
-    Base class for a stochastic (robust) architecture optimization problem.
+    Base class for a stochastic (robust) architecture optimization problem. It extends the ArchOptProblemBase class
+    with support for stochastic optimization problems.
+
+    Stochastic problem evaluates design vector for many realizations of the uncertain parameters and
+    reduces the resulting distribution of each response to the single value the optimizer sees.
+    Three things are therefore needed on top of the design variables:
+
+    - `param_space`: a `StochasticParameterSpace`, the joint distribution of the uncertain parameters. These are
+     quantities that influence the evaluation but are not chosen by the optimizer, so they are NOT design
+     variables.
+    - `uq_method`: a `UQMethod` (`MonteCarlo`, `PolynomialChaos`) that decides which realizations to evaluate and
+     how to turn the responses into statistics. It is given a budget of `n_evaluations` expensive evaluations per
+     design point.
+    - a `Scalarization` per response, below.
+
+    Requires specifying a type of optimization problem for each objective and constraint by providing a child
+    instance of Scalarization object:
+
+    - Mean: Minimize the expectation of the objective or constraint function
+     --> for example min(E[F(x)])
+    - Margin: Gaussian output distribution expected. Minimize for the objective or constraint function for a given
+     confidence interval.
+     --> min(E[F(x)] + k*sigma[F(x)]); The default k=1.645 is the one-sided 95% interval of a normal distribution.
+    - Quantile: Makes no distributional assumption. Minimize the q quantile of the objective or constraint
+     function --> min(F_q(x)), with q=0.95 by default.
+
+    When type of optimization problem is not provided, the response defaults to `Mean()`.
+
+    Implement `_arch_evaluate_sample`: it is called once per realization. All design points in a batch see the same
+    realizations (common random numbers), so they stay comparable to each other and to a surrogate fitted through
+    them.
+
+    A failed evaluation (NaN) in any realization fails the whole design point: `reduce` returns NaN,
+    which is how SBArchOpt treats hidden-constraint violations elsewhere.
+
+    After each evaluation the full sampled responses are available per design point as a `StochasticResults` in
+    `self.stochastic_results`, and are also published in the pymoo output dictionary under `out['stochastic']`.
+    For polynomial chaos that object also carries the fitted expansions (`method_result`), from which Sobol indices can be obtained.
     """
 
     def __init__(self, des_vars: Union[List[Variable], ArchDesignSpace],
