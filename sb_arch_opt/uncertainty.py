@@ -22,7 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from typing import List, Optional, Dict
+from typing import List, Optional
 
 import openturns as ot
 import numpy as np
@@ -101,11 +101,13 @@ class StochasticParameter:
 
      :param name: identifies the parameter
      :param value: OpenTurns distribution object
+     :param ref: Optional reference object used for matching with the related class
      """
 
-    def __init__(self, name, value: ot.DistributionImplementation):
+    def __init__(self, name, value: ot.DistributionImplementation, ref=None):
         self.name = name
         self.value = value
+        self.ref = ref
         self._sample = None
 
     @property
@@ -174,59 +176,63 @@ class StochasticOutput:
     """
     The object representing the stochastic output of a single objective or constraint for a given design point.
 
-    :param output_samples: the output samples computed for the specific objective or constraint.
+    :param distribution: the output distribution for the specific objective or constraint.
     """
 
-    def __init__(self, output_samples: ot.Sample):
-        self.output_samples = output_samples          # ot.Sample of shape (n, 1)
+    def __init__(self, distribution: ot.Distribution, method_results=None):
+        self.distribution = distribution
+        self.method_results = method_results
 
     @classmethod
-    def from_results(cls, results: ot.Sample, index: int) -> 'StochasticOutput':
+    def from_results(cls, results: ot.Sample, index: int, method_results=None) -> 'StochasticOutput':
         """Extract one response's column from the full (n_samples, n_outputs) results of a single design point."""
-        return cls(output_samples=results.getMarginal(index))
+        dist = ot.KernelSmoothing().build(results.getMarginal(index))
+        return cls(distribution=dist, method_results=method_results)
+
+    @classmethod
+    def from_output_samples(cls, output_samples: ot.Sample, method_results=None) -> 'StochasticOutput':
+        """From the outputs of a single objective or constraint construct the object."""
+        dist = ot.KernelSmoothing().build(output_samples)
+        return cls(distribution=dist, method_results=method_results)
 
     @property
     def mean(self) -> float:
-        return self.output_samples.computeMean()[0]
+        return self.distribution.getMean()[0]
 
     @property
     def std(self) -> float:
-        return self.output_samples.computeStandardDeviation()[0]
-
-    @property
-    def var(self) -> float:
-        return self.output_samples.computeVariance()[0]
+        return self.distribution.getStandardDeviation()[0]
 
     def quantile(self, q: float) -> float:
-        return self.output_samples.computeQuantile(q)[0]
+        return self.distribution.computeQuantile(q)
 
-    def prob_exceeds(self, threshold: float) -> float:
-        arr = self.to_numpy()
-        return float(np.mean(arr > threshold))
+    # def prob_exceeds(self, threshold: float) -> float:
+    #     arr = self.to_numpy()
+    #     return float(np.mean(arr > threshold))
 
     def margin(self, k: float = 1.645, direction: int =-1) -> float:
         """mean + k*sigma - the Gaussian-assumption margin formulation."""
         return self.mean - np.sign(direction) * k * self.std
 
-    @property
-    def to_distribution(self) -> ot.Distribution:
-        """Fit a continuous distribution."""
-        return ot.KernelSmoothing().build(self.output_samples)
+    # @property
+    # def to_distribution(self) -> ot.Distribution:
+    #     """Fit a continuous distribution."""
+    #     return ot.KernelSmoothing().build(self.output_samples)
 
-    def to_numpy(self) -> np.ndarray:
-        return np.array(self.output_samples).flatten()
+    # def to_numpy(self) -> np.ndarray:
+    #     return np.array(self.output_samples).flatten()
 
-    def reduce(self, scalar: Scalarization) -> float:
-        """
-        Reduce the sampled values to the single value the optimizer sees, by applying the given scalar.
-        """
-        values = self.to_numpy()
-
-        if values.size == 0 or not np.all(np.isfinite(values)):
-            return np.nan
-        samples = self.output_samples
-
-        return scalar.reduce(samples)
+    # def reduce(self, scalar: Scalarization) -> float:
+    #     """
+    #     Reduce the sampled values to the single value the optimizer sees, by applying the given scalar.
+    #     """
+    #     values = self.to_numpy()
+    #
+    #     if values.size == 0 or not np.all(np.isfinite(values)):
+    #         return np.nan
+    #     samples = self.output_samples
+    #
+    #     return scalar.reduce(samples)
 
     def __str__(self):
         if self.std / self.mean < 1e-6:
@@ -235,17 +241,17 @@ class StochasticOutput:
 
 
 
-class StochasticResults:
-    """
-    Single object that stores all stochastic objectives or constraints for a given design point.
-
-    :param method_result: optionally carries whatever the UQ method produced beyond the samples themselves; for polynomial
-    chaos that is the list of `ot.FunctionalChaosResult`s, from which for example Sobol indices can be obtained.
-    """
-
-    def __init__(self, outputs: List[StochasticOutput], method_result=None):
-        self.outputs = outputs
-        self.method_result = method_result
+# class StochasticResults:
+#     """
+#     Single object that stores all stochastic objectives or constraints for a given design point.
+#
+#     :param method_result: optionally carries whatever the UQ method produced beyond the samples themselves; for polynomial
+#     chaos that is the list of `ot.FunctionalChaosResult`s, from which for example Sobol indices can be obtained.
+#     """
+#
+#     def __init__(self, outputs: List[StochasticOutput], method_result=None):
+#         self.outputs = outputs
+#         self.method_result = method_result
 
 
 class UQMethod:
@@ -291,7 +297,7 @@ class UQMethod:
         """Draw a new design on the next evaluation"""
         self._samples = None
 
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> StochasticResults:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> list[StochasticOutput]:
         """
         Turn the responses of ONE design point (an n_samples x (n_obj+n_ieq_constr+n_eq_constr) matrix) into the
         stochastic result object that contains list of stochastic outputs.
@@ -312,12 +318,12 @@ class MonteCarlo(UQMethod):
         samples = param_space.get_lhs_samples(self.n_evaluations)
         return samples
 
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace = None) -> StochasticResults:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace = None) -> list[StochasticOutput]:
         results = np.asarray(results, dtype=float)
 
         sample = ot.Sample(results)
         outputs = [StochasticOutput.from_results(sample, i) for i in range(results.shape[1])]
-        return StochasticResults(outputs)
+        return outputs
 
 
 class PolynomialChaos(UQMethod):
@@ -378,13 +384,13 @@ class PolynomialChaos(UQMethod):
         return ot.FunctionalChaosAlgorithm(input_sample, output_sample, distribution,
                                            adaptive_strategy, projection_strategy)
 
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> StochasticResults:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> list[StochasticOutput]:
         results = np.asarray(results, dtype=float)
 
         input_sample = ot.Sample(self.get_samples(param_space))
         metamodel_input = self._get_metamodel_input(param_space)
 
-        outputs, chaos_results = [], []
+        outputs = []
         for i_out in range(results.shape[1]):
             values = results[:, i_out]
 
@@ -392,14 +398,13 @@ class PolynomialChaos(UQMethod):
             # the problem's nan_policy decides what happens to this design point
             if not np.all(np.isfinite(values)):
                 samples = ot.Sample(values.reshape((-1, 1)))
-                chaos_results.append(None)
+                chaos_result = None
 
             else:
                 algorithm = self._build_algorithm(param_space, input_sample, ot.Sample(values.reshape((-1, 1))))
                 algorithm.run()
                 chaos_result = algorithm.getResult()
-                chaos_results.append(chaos_result)
                 samples = chaos_result.getMetaModel()(metamodel_input)
 
-            outputs.append(StochasticOutput(samples))
-        return StochasticResults(outputs, method_result=chaos_results)
+            outputs.append(StochasticOutput.from_output_samples(samples, chaos_result))
+        return outputs

@@ -138,7 +138,6 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         # Get samples and include deterministic parameter values for evaluation
         samples = self.uq_method.get_samples(self.param_space)
-        # parameter_values = self.uq_method.param_space.include_deterministic_values(samples)
 
         n_x, n_s = x.shape[0], samples.shape[0]
 
@@ -154,17 +153,20 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         # Evaluate the stochastic result for all the evaluated design vectors and samples
         self.stochastic_results = []
         for x_i in range(n_x):
-            results = self.uq_method.process_results(np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1), self.param_space)
-            self.stochastic_results.append(results)
+            outputs = self.uq_method.process_results(np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1), self.param_space)
+            self.stochastic_results.append(outputs)
 
             # Reduce the sampled responses of each design point to the values the optimizer sees
             n_f, n_g = self.n_obj, self.n_ieq_constr
-            for f_i, output in enumerate(results.outputs[:n_f]):
-                f_out[x_i, f_i] = output.reduce(self.obj_scalar[f_i])
-            for g_i, output in enumerate(results.outputs[n_f:n_f+n_g]):
-                g_out[x_i, g_i] = output.reduce(self.ieq_constr_scalar[g_i])
-            for h_i, output in enumerate(results.outputs[n_f+n_g:]):
-                h_out[x_i, h_i] = output.reduce(self.eq_constr_scalar[h_i])
+            for f_i, output in enumerate(outputs[:n_f]):
+                obj_scalar = self.obj_scalar[f_i]
+                f_out[x_i, f_i] = obj_scalar.reduce(f_s[:, x_i, f_i])
+            for g_i, output in enumerate(outputs[n_f:n_f+n_g]):
+                ieq_constr_scalar = self.ieq_constr_scalar[g_i]
+                g_out[x_i, g_i] = ieq_constr_scalar.reduce(g_s[x_i])
+            for h_i, output in enumerate(outputs[n_f+n_g:]):
+                eq_constr_scalar = self.eq_constr_scalar[h_i]
+                h_out[x_i, h_i] = eq_constr_scalar.reduce(h_s[x_i])
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, parameters: np.ndarray, *args, **kwargs):
