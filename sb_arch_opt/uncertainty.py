@@ -124,10 +124,7 @@ class StochasticParameter:
 
 class StochasticParameterSpace:
     """
-     The joint distribution of all stochastic parameters of a problem.
-
-     The parameters are assumed to be independent.
-
+     The joint distribution of all stochastic parameters of a problem, which are assumed to be independent.
      The space does not store the sampled parameters as its attribute. The samples are processed by the chosen UQ method.
 
      :param parameters: the stochastic parameters
