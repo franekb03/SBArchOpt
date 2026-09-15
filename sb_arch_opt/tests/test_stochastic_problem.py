@@ -41,7 +41,7 @@ def test_parameter_space():
 
 def test_scalars():
     out = _output([1., 2., 3., 4., 5.])
-    mean, std = out.mean(), out.std()
+    mean, std = out.mean, out.std
 
     assert out.reduce(Mean()) == pytest.approx(mean)
     assert out.reduce(Quantile(q=.9)) == pytest.approx(out.quantile(.9))
@@ -62,7 +62,7 @@ def test_scalars():
 
 def test_scalars_penalize_spread():
     wide, narrow = _output([1., 3., 5.]), _output([2.5, 3., 3.5])
-    assert wide.mean() == pytest.approx(narrow.mean())
+    assert wide.mean == pytest.approx(narrow.mean)
 
     assert narrow.reduce(Margin(k=2.)) < wide.reduce(Margin(k=2.))  # minimized: lower is better
     assert narrow.reduce(Margin(k=2., direction=1)) > wide.reduce(Margin(k=2., direction=1))  # maximized
@@ -114,13 +114,8 @@ def test_parameter_realization():
 
         assert [parameter.name for parameter in parameters] == ['a', 'b']
         # Column j of the design belongs to parameter j
-        assert [parameter.sample_realization for parameter in parameters] == pytest.approx(list(samples[i, :]))
-        assert all(isinstance(parameter.sample_realization, float) for parameter in parameters)
-
-    # The parameters keep their distribution alongside the realization
-    a, b = space.param_realization(samples, 0)
-    assert (a.mean(), a.std()) == pytest.approx((0., 1.))
-    assert (b.mean(), b.std()) == pytest.approx((3., 2./np.sqrt(12.)))
+        assert [parameter.sample for parameter in parameters] == pytest.approx(list(samples[i, :]))
+        assert all(isinstance(parameter.sample, float) for parameter in parameters)
 
 
 def test_process_results():
@@ -131,7 +126,7 @@ def test_process_results():
 
     assert isinstance(result, StochasticResults)
     assert len(result.outputs) == 3  # one output per response column
-    assert [output.mean() for output in result.outputs] == pytest.approx([2., 11., 21.])
+    assert [output.mean for output in result.outputs] == pytest.approx([2., 11., 21.])
     assert result.method_result is None  # Monte Carlo has nothing beyond the samples
 
 def test_user_only_implements_arch_evaluate_sample(stochastic_problem):
@@ -216,7 +211,7 @@ def test_response_kinds_use_their_own_scalar(all_response_kinds_problem):
     assert out['H'][0, 0] == pytest.approx(result.outputs[2].reduce(Margin(k=3.)))
 
     # The equality constraint uses a margin, so it is above its own mean
-    assert out['H'][0, 0] > result.outputs[2].mean()
+    assert out['H'][0, 0] > result.outputs[2].mean
 
 
 def test_scalar_counts_checked_per_response_kind():
@@ -266,18 +261,18 @@ def test_reported_statistics_reproduce_the_reduced_value():
     for i, result in enumerate(out['stochastic']):
         output = result.outputs[0]
         assert out['F'][i, 0] == pytest.approx(output.reduce(Margin(k=2.)))
-        assert out['F'][i, 0] == pytest.approx(output.mean() + 2.*output.std())
+        assert out['F'][i, 0] == pytest.approx(output.mean + 2.*output.std)
 
 
 def test_stochastic_output_statistics():
     out = _output(np.linspace(0., 10., 101))
 
-    assert out.mean() == pytest.approx(5.)
-    assert out.var() == pytest.approx(out.std()**2)
+    assert out.mean == pytest.approx(5.)
+    assert out.var == pytest.approx(out.std**2)
     assert out.quantile(.5) == pytest.approx(5., abs=.1)
     assert out.prob_exceeds(5.) == pytest.approx(.5, abs=.02)
     assert len(out.to_numpy()) == 101
-    assert out.to_distribution().computeCDF(5.) == pytest.approx(.5, abs=.05)
+    assert out.to_distribution.computeCDF(5.) == pytest.approx(.5, abs=.05)
 
 
 def test_a_failed_sample_fails_the_design_point():

@@ -78,12 +78,16 @@ class StochasticParameter:
         self.value = value
         self._sample = None
 
-    def set_sample(self, value: float):
+    @property
+    def sample(self) -> float:
+        return self._sample
+
+    @sample.setter
+    def sample(self, value: float):
         self._sample = value
 
-    @property
-    def sample_realization(self) -> float:
-        return self._sample
+
+
 
 class StochasticParameterSpace:
     """The joint distribution of all stochastic parameters of a problem."""
@@ -107,7 +111,7 @@ class StochasticParameterSpace:
 
     def param_realization(self, samples: np.ndarray, i_realization: int) -> List[StochasticParameter]:
         for j, param in enumerate(self._parameters):
-            param.set_sample(samples[i_realization, j])
+            param.sample = samples[i_realization, j]
         return self._parameters
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
@@ -284,7 +288,6 @@ class PolynomialChaos(UQMethod):
         return int(enumerate_function.getStrataCumulatedCardinal(self.degree))
 
     def _validate(self, param_space: StochasticParameterSpace):
-        # Needs the parameter space, since the number of terms depends on the number of parameters
         n_terms = self.n_terms(param_space)
         if self.n_evaluations < n_terms:
             raise ValueError(f'A degree-{self.degree} expansion in {param_space.n_parameters} '
