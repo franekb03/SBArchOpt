@@ -68,12 +68,14 @@ class StochasticArchOptProblem(ArchOptProblemBase):
     realizations (common random numbers), so they stay comparable to each other and to a surrogate fitted through
     them.
 
-    A failed evaluation (NaN) in any realization fails the whole design point: `reduce` returns NaN,
+    A failed evaluation (NaN) in any realization fails the whole design point: `scalarize` returns NaN,
     which is how SBArchOpt treats hidden-constraint violations elsewhere.
 
-    After each evaluation the full sampled responses are available per design point as a `StochasticResults` in
-    `self.stochastic_results`, and are also published in the pymoo output dictionary under `out['stochastic']`.
-    For polynomial chaos that object also carries the fitted expansions (`method_result`), from which Sobol indices can be obtained.
+    After each evaluation the fitted response distributions are published in the pymoo output dictionary as
+    `StochasticOutput` objects, in `out['f_stochastic']`, `out['g_stochastic']` and `out['h_stochastic']`, each
+    an (n_design_points x n_responses) object array laid out like `out['F']`, `out['G']` and `out['H']`.
+    For polynomial chaos each output also carries the fitted expansion (`method_results`), from which Sobol
+    indices can be obtained.
     """
 
     def __init__(self, des_vars: Union[List[Variable], ArchDesignSpace],
@@ -161,15 +163,15 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             for f_i, output in enumerate(outputs[:n_f]):
                 f_stoch_out[x_i, f_i] = output
                 obj_scalar = self.obj_scalar[f_i]
-                f_out[x_i, f_i] = output.scalarize(obj_scalar)
+                f_out[x_i, f_i] = output.scalarize(obj_scalar) if not isinstance(output, float) else output
             for g_i, output in enumerate(outputs[n_f:n_f+n_g]):
                 g_stoch_out[x_i, g_i] = output
                 ieq_constr_scalar = self.ieq_constr_scalar[g_i]
-                g_out[x_i, g_i] = output.scalarize(ieq_constr_scalar)
+                g_out[x_i, g_i] = output.scalarize(ieq_constr_scalar) if not isinstance(output, float) else output
             for h_i, output in enumerate(outputs[n_f+n_g:]):
                 h_stoch_out[x_i, h_i] = output
                 eq_constr_scalar = self.eq_constr_scalar[h_i]
-                h_out[x_i, h_i] = output.scalarize(eq_constr_scalar)
+                h_out[x_i, h_i] = output.scalarize(eq_constr_scalar) if not isinstance(output, float) else output
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, parameters: np.ndarray, *args, **kwargs):

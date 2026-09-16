@@ -22,13 +22,17 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import openturns as ot
 import numpy as np
 
 __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
            'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos']
+
+from openturns import Evaluation
+
+EvaluationOutput = Union['StochasticOutput', float]
 
 
 class StochasticParameter:
@@ -123,16 +127,25 @@ class StochasticOutput:
         self.distribution = distribution
         self.method_results = method_results
 
-    @classmethod
-    def from_results(cls, results: ot.Sample, index: int, method_results=None) -> 'StochasticOutput':
-        """Extract one response's column from the full (n_samples, n_outputs) results of a single design point."""
-        dist = ot.KernelSmoothing().build(results.getMarginal(index))
-        return cls(distribution=dist, method_results=method_results)
+    @staticmethod
+    def build_distribution(output_samples: ot.Sample) -> ot.Distribution | float:
+        values = np.asarray(output_samples, dtype=float).ravel()
+
+        if values.size == 0 or not np.all(np.isfinite(values)):
+            return np.nan
+
+        mean, std = float(np.mean(values)), float(np.std(values))
+        if std <= 1e-12*max(abs(mean), 1.):
+            return mean
+        else:
+            return ot.KernelSmoothing().build(output_samples)
 
     @classmethod
-    def from_output_samples(cls, output_samples: ot.Sample, method_results=None) -> 'StochasticOutput':
+    def from_output_samples(cls, output_samples: ot.Sample, method_results=None) -> EvaluationOutput:
         """From the outputs of a single objective or constraint construct the object."""
-        dist = ot.KernelSmoothing().build(output_samples)
+        dist = cls.build_distribution(output_samples)
+        if isinstance(dist, float):
+            return dist
         return cls(distribution=dist, method_results=method_results)
 
     @property
@@ -287,7 +300,7 @@ class UQMethod:
         """Draw a new design on the next evaluation"""
         self._samples = None
 
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> list[StochasticOutput]:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> list[EvaluationOutput]:
         """
         Turn the responses of ONE design point (an n_samples x (n_obj+n_ieq_constr+n_eq_constr) matrix) into the
         stochastic result object that contains list of stochastic outputs.
@@ -308,11 +321,11 @@ class MonteCarlo(UQMethod):
         samples = param_space.get_lhs_samples(self.n_evaluations)
         return samples
 
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace = None) -> list[StochasticOutput]:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace = None) -> list[EvaluationOutput]:
         results = np.asarray(results, dtype=float)
 
         sample = ot.Sample(results)
-        outputs = [StochasticOutput.from_results(sample, i) for i in range(results.shape[1])]
+        outputs = [StochasticOutput.from_output_samples(sample[:, i]) for i in range(results.shape[1])]
         return outputs
 
 
@@ -374,7 +387,7 @@ class PolynomialChaos(UQMethod):
         return ot.FunctionalChaosAlgorithm(input_sample, output_sample, distribution,
                                            adaptive_strategy, projection_strategy)
 
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> list[StochasticOutput]:
+    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> list[EvaluationOutput]:
         results = np.asarray(results, dtype=float)
 
         input_sample = ot.Sample(self.get_samples(param_space))
