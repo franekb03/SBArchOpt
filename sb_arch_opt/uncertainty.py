@@ -28,67 +28,7 @@ import openturns as ot
 import numpy as np
 
 __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
-           'StochasticOutput', 'StochasticResults', 'UQMethod', 'MonteCarlo', 'PolynomialChaos']
-
-
-
-class Scalarization:
-    """
-    Parent class for all types of robust optimization problem. Do not instantiate this class directly, use its subclasses:
-
-    - Mean
-    - Margin
-    - Quantile
-    """
-
-    def reduce(self, samples: ot.Sample) -> float:
-        """Reduce an (n_samples x 1) sample of one response to a single value that the optimizer sees based on the optimization problem type."""
-        raise NotImplementedError
-
-
-class Mean(Scalarization):
-    """Minimize the expectation of the objective or constraint function for example min(E[F(x)])"""
-
-    def reduce(self, samples: ot.Sample) -> float:
-        return float(samples.computeMean()[0])
-
-class Margin(Scalarization):
-    """
-    Gaussian output distribution expected. Minimize for the objective or constraint function for a given
-    confidence interval.
-    --> min(E[F(x)] + k*sigma[F(x)]); The default k=1.645 is the one-sided 95% interval of a normal distribution.
-
-    Requires:
-
-    - :param k: coverage factor, i.e. the number of standard deviations added to the mean (default 1.645 covers 95% of a normal response on one side; 1, 2 and 3 give 84.1%, 97.7% and 99.9%).
-    - :param direction: -1 for minimizing and +1 for maximizing.
-    """
-
-    def __init__(self, k: float = 1.645, direction: int =-1):
-        self.k = k
-        self.direction = direction
-
-    def reduce(self, samples: ot.Sample) -> float:
-        return float(samples.computeMean()[0] - self.k * np.sign(self.direction) * samples.computeStandardDeviation()[0])
-
-class Quantile(Scalarization):
-    """
-    Makes no distributional assumption. Minimize the q quantile of the objective or constraint function --> min(F_q(x)), with q=0.95 by default.
-
-    Requires:
-
-    :param q: quantile level in [0, 1], i.e. the probability that the response falls below the returned value (default 0.95);
-    unlike Margin this assumes nothing about the distribution shape, since the quantile is taken from the samples directly.
-
-    """
-
-    def __init__(self, q: float = 0.95):
-        if not 0. <= q <= 1.:
-            raise ValueError(f'Quantile should be between 0 and 1: {q}')
-        self.q = q
-
-    def reduce(self, samples: ot.Sample) -> float:
-        return float(samples.computeQuantile(self.q)[0])
+           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos']
 
 
 class StochasticParameter:
@@ -204,7 +144,7 @@ class StochasticOutput:
         return self.distribution.getStandardDeviation()[0]
 
     def quantile(self, q: float) -> float:
-        return self.distribution.computeQuantile(q)
+        return self.distribution.computeQuantile(q)[0]
 
     # def prob_exceeds(self, threshold: float) -> float:
     #     arr = self.to_numpy()
@@ -222,20 +162,14 @@ class StochasticOutput:
     # def to_numpy(self) -> np.ndarray:
     #     return np.array(self.output_samples).flatten()
 
-    # def reduce(self, scalar: Scalarization) -> float:
-    #     """
-    #     Reduce the sampled values to the single value the optimizer sees, by applying the given scalar.
-    #     """
-    #     values = self.to_numpy()
-    #
-    #     if values.size == 0 or not np.all(np.isfinite(values)):
-    #         return np.nan
-    #     samples = self.output_samples
-    #
-    #     return scalar.reduce(samples)
+    def scalarize(self, scalar: 'Scalarization') -> float:
+        """
+        Reduce the sampled values to the single value the optimizer sees, by applying the given scalar.
+        """
+        return scalar.reduce(self)
 
     def __str__(self):
-        if self.std / self.mean < 1e-6:
+        if abs(self.std / self.mean) < 1e-6:
             return f'{self.mean:.4g}'
         return f"(mean = {self.mean:.4g}, sigma = {self.std:.4g})"
 
@@ -253,6 +187,62 @@ class StochasticOutput:
 #         self.outputs = outputs
 #         self.method_result = method_result
 
+class Scalarization:
+    """
+    Parent class for all types of robust optimization problem. Do not instantiate this class directly, use its subclasses:
+
+    - Mean
+    - Margin
+    - Quantile
+    """
+    def reduce(self, output: StochasticOutput) -> float:
+        """Reduce an (n_samples x 1) sample of one response to a single value that the optimizer sees based on the optimization problem type."""
+        raise NotImplementedError
+
+
+class Mean(Scalarization):
+    """Minimize the expectation of the objective or constraint function for example min(E[F(x)])"""
+
+    def reduce(self, output: StochasticOutput) -> float:
+        return float(output.mean)
+
+class Margin(Scalarization):
+    """
+    Gaussian output distribution expected. Minimize for the objective or constraint function for a given
+    confidence interval.
+    --> min(E[F(x)] + k*sigma[F(x)]); The default k=1.645 is the one-sided 95% interval of a normal distribution.
+
+    Requires:
+
+    - :param k: coverage factor, i.e. the number of standard deviations added to the mean (default 1.645 covers 95% of a normal response on one side; 1, 2 and 3 give 84.1%, 97.7% and 99.9%).
+    - :param direction: -1 for minimizing and +1 for maximizing.
+    """
+
+    def __init__(self, k: float = 1.645, direction: int =-1):
+        self.k = k
+        self.direction = direction
+
+    def reduce(self, output: StochasticOutput) -> float:
+        return float(output.margin(self.k, self.direction))
+
+class Quantile(Scalarization):
+    """
+    Makes no distributional assumption. Minimize the q quantile of the objective or constraint function --> min(F_q(x)), with q=0.95 by default.
+
+    Requires:
+
+    :param q: quantile level in [0, 1], i.e. the probability that the response falls below the returned value (default 0.95);
+    unlike Margin this assumes nothing about the distribution shape, since the quantile is taken from the samples directly.
+
+    """
+
+    def __init__(self, q: float = 0.95):
+        if not 0. <= q <= 1.:
+            raise ValueError(f'Quantile should be between 0 and 1: {q}')
+        self.q = q
+
+    def reduce(self, output: StochasticOutput) -> float:
+        return float(output.quantile(self.q))
 
 class UQMethod:
     """

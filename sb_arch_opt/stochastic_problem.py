@@ -99,8 +99,6 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         self.param_space = param_space
         self.uq_method = uq_method
-        # List for storing stochastic results object for each design point
-        self.stochastic_results: List[StochasticResults] = []
 
         super().__init__(des_vars, n_obj=n_obj, n_ieq_constr=n_ieq_constr, n_eq_constr=n_eq_constr, **kwargs)
 
@@ -119,15 +117,20 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         return list(scalars)
 
     def _evaluate(self, x, out, *args, **kwargs):
-        # The pymoo outputs are processed by the parent method
-        super()._evaluate(x, out, *args, **kwargs)
+        n = x.shape[0]
+        f_stoch = np.empty((n, self.n_obj), dtype=object)
+        g_stoch = np.empty((n, self.n_ieq_constr), dtype=object)
+        h_stoch = np.empty((n, self.n_eq_constr), dtype=object)
+        kwargs.update(f_stoch_out=f_stoch, g_stoch_out=g_stoch, h_stoch_out=h_stoch)
 
-        # Add stochastic result to pymoo out dictionary.
-        if len(self.stochastic_results) == len(out['X']):
-            out['stochastic'] = list(self.stochastic_results)
+        super()._evaluate(x, out, *args, **kwargs)
+        out['f_stochastic'] = f_stoch
+        out['g_stochastic'] = g_stoch
+        out['h_stochastic'] = h_stoch
+
 
     def _arch_evaluate(self, x: np.ndarray, is_active_out: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
-                       h_out: np.ndarray, *args, **kwargs):
+                       h_out: np.ndarray, *args, f_stoch_out: np.ndarray=None, g_stoch_out: np.ndarray=None, h_stoch_out: np.ndarray=None, **kwargs):
         """
         Evaluate architecture for the provided design vectors and samples.
         Implement _arch_evaluate_sample to evaluate architecture for single samples realizations.
@@ -147,26 +150,26 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         # Evaluate all design vectors for each realization of the uncertain parameters
         for i in range(n_s):
-            self._arch_evaluate_sample(
-                x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], samples[i, :],*args, **kwargs)
+            self._arch_evaluate_sample(x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], samples[i, :],*args, **kwargs)
 
         # Evaluate the stochastic result for all the evaluated design vectors and samples
-        self.stochastic_results = []
         for x_i in range(n_x):
             outputs = self.uq_method.process_results(np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1), self.param_space)
-            self.stochastic_results.append(outputs)
 
             # Reduce the sampled responses of each design point to the values the optimizer sees
             n_f, n_g = self.n_obj, self.n_ieq_constr
             for f_i, output in enumerate(outputs[:n_f]):
+                f_stoch_out[x_i, f_i] = output
                 obj_scalar = self.obj_scalar[f_i]
-                f_out[x_i, f_i] = obj_scalar.reduce(f_s[:, x_i, f_i])
+                f_out[x_i, f_i] = output.scalarize(obj_scalar)
             for g_i, output in enumerate(outputs[n_f:n_f+n_g]):
+                g_stoch_out[x_i, g_i] = output
                 ieq_constr_scalar = self.ieq_constr_scalar[g_i]
-                g_out[x_i, g_i] = ieq_constr_scalar.reduce(g_s[x_i])
+                g_out[x_i, g_i] = output.scalarize(ieq_constr_scalar)
             for h_i, output in enumerate(outputs[n_f+n_g:]):
+                h_stoch_out[x_i, h_i] = output
                 eq_constr_scalar = self.eq_constr_scalar[h_i]
-                h_out[x_i, h_i] = eq_constr_scalar.reduce(h_s[x_i])
+                h_out[x_i, h_i] = output.scalarize(eq_constr_scalar)
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, parameters: np.ndarray, *args, **kwargs):

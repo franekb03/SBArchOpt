@@ -43,18 +43,18 @@ def test_scalars():
     out = _output([1., 2., 3., 4., 5.])
     mean, std = out.mean, out.std
 
-    assert out.reduce(Mean()) == pytest.approx(mean)
-    assert out.reduce(Quantile(q=.9)) == pytest.approx(out.quantile(.9))
-    assert out.reduce(Margin(k=2.)) == pytest.approx(out.margin(2.))
+    assert out.scalarize(Mean()) == pytest.approx(mean)
+    assert out.scalarize(Quantile(q=.9)) == pytest.approx(out.quantile(.9))
+    assert out.scalarize(Margin(k=2.)) == pytest.approx(out.margin(2.))
 
     # The margin is the conservative value, so which tail that is depends on the direction
-    assert out.reduce(Margin(k=2.)) == pytest.approx(mean + 2.*std)
-    assert out.reduce(Margin(k=2., direction=-1)) == pytest.approx(mean + 2.*std)
-    assert out.reduce(Margin(k=2., direction=1)) == pytest.approx(mean - 2.*std)
+    assert out.scalarize(Margin(k=2.)) == pytest.approx(mean + 2. * std)
+    assert out.scalarize(Margin(k=2., direction=-1)) == pytest.approx(mean + 2. * std)
+    assert out.scalarize(Margin(k=2., direction=1)) == pytest.approx(mean - 2. * std)
 
     # Each instance carries its own parameters
-    assert out.reduce(Quantile(q=.5)) != out.reduce(Quantile(q=.95))
-    assert out.reduce(Margin(k=1.)) != out.reduce(Margin(k=3.))
+    assert out.scalarize(Quantile(q=.5)) != out.scalarize(Quantile(q=.95))
+    assert out.scalarize(Margin(k=1.)) != out.scalarize(Margin(k=3.))
 
     with pytest.raises(ValueError):
         Quantile(q=2.)
@@ -64,16 +64,16 @@ def test_scalars_penalize_spread():
     wide, narrow = _output([1., 3., 5.]), _output([2.5, 3., 3.5])
     assert wide.mean == pytest.approx(narrow.mean)
 
-    assert narrow.reduce(Margin(k=2.)) < wide.reduce(Margin(k=2.))  # minimized: lower is better
-    assert narrow.reduce(Margin(k=2., direction=1)) > wide.reduce(Margin(k=2., direction=1))  # maximized
+    assert narrow.scalarize(Margin(k=2.)) < wide.scalarize(Margin(k=2.))  # minimized: lower is better
+    assert narrow.scalarize(Margin(k=2., direction=1)) > wide.scalarize(Margin(k=2., direction=1))  # maximized
 
 
 def test_custom_scalar():
     class WorstCase(Scalarization):
-        def reduce(self, samples):
-            return float(samples.getMax()[0])
+        def reduce(self, output):
+            return float(output.getMax()[0])
 
-    assert _output([1., 5., 3.]).reduce(WorstCase()) == pytest.approx(5.)
+    assert _output([1., 5., 3.]).scalarize(WorstCase()) == pytest.approx(5.)
 
 
 @pytest.mark.parametrize('method_class', [MonteCarlo, PolynomialChaos])
@@ -206,9 +206,9 @@ def test_response_kinds_use_their_own_scalar(all_response_kinds_problem):
     result = out['stochastic'][0]
 
     assert len(result.outputs) == 3
-    assert out['F'][0, 0] == pytest.approx(result.outputs[0].reduce(Mean()))
-    assert out['G'][0, 0] == pytest.approx(result.outputs[1].reduce(Mean()))
-    assert out['H'][0, 0] == pytest.approx(result.outputs[2].reduce(Margin(k=3.)))
+    assert out['F'][0, 0] == pytest.approx(result.outputs[0].scalarize(Mean()))
+    assert out['G'][0, 0] == pytest.approx(result.outputs[1].scalarize(Mean()))
+    assert out['H'][0, 0] == pytest.approx(result.outputs[2].scalarize(Margin(k=3.)))
 
     # The equality constraint uses a margin, so it is above its own mean
     assert out['H'][0, 0] > result.outputs[2].mean
@@ -260,7 +260,7 @@ def test_reported_statistics_reproduce_the_reduced_value():
 
     for i, result in enumerate(out['stochastic']):
         output = result.outputs[0]
-        assert out['F'][i, 0] == pytest.approx(output.reduce(Margin(k=2.)))
+        assert out['F'][i, 0] == pytest.approx(output.scalarize(Margin(k=2.)))
         assert out['F'][i, 0] == pytest.approx(output.mean + 2.*output.std)
 
 
