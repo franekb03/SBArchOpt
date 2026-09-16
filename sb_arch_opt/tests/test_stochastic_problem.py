@@ -70,7 +70,7 @@ def test_scalars_penalize_spread():
 
 def test_custom_scalar():
     class WorstCase(Scalarization):
-        def reduce(self, output):
+        def scalarize(self, output):
             return float(output.getMax()[0])
 
     assert _output([1., 5., 3.]).scalarize(WorstCase()) == pytest.approx(5.)

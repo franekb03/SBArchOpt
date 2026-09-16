@@ -30,8 +30,6 @@ import numpy as np
 __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
            'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos']
 
-from openturns import Evaluation
-
 EvaluationOutput = Union['StochasticOutput', float]
 
 
@@ -64,9 +62,6 @@ class StochasticParameter:
     @sample.setter
     def sample(self, value: float):
         self._sample = value
-
-
-
 
 class StochasticParameterSpace:
     """
@@ -114,8 +109,6 @@ class StochasticParameterSpace:
         result = lhs.generate()
         return np.array(result)
 
-
-
 class StochasticOutput:
     """
     The object representing the stochastic output of a single objective or constraint for a given design point.
@@ -159,46 +152,12 @@ class StochasticOutput:
     def quantile(self, q: float) -> float:
         return self.distribution.computeQuantile(q)[0]
 
-    # def prob_exceeds(self, threshold: float) -> float:
-    #     arr = self.to_numpy()
-    #     return float(np.mean(arr > threshold))
-
     def margin(self, k: float = 1.645, direction: int =-1) -> float:
         """mean + k*sigma - the Gaussian-assumption margin formulation."""
         return self.mean - np.sign(direction) * k * self.std
 
-    # @property
-    # def to_distribution(self) -> ot.Distribution:
-    #     """Fit a continuous distribution."""
-    #     return ot.KernelSmoothing().build(self.output_samples)
-
-    # def to_numpy(self) -> np.ndarray:
-    #     return np.array(self.output_samples).flatten()
-
-    def scalarize(self, scalar: 'Scalarization') -> float:
-        """
-        Reduce the sampled values to the single value the optimizer sees, by applying the given scalar.
-        """
-        return scalar.reduce(self)
-
     def __str__(self):
-        if abs(self.std / self.mean) < 1e-6:
-            return f'{self.mean:.4g}'
         return f"(mean = {self.mean:.4g}, sigma = {self.std:.4g})"
-
-
-
-# class StochasticResults:
-#     """
-#     Single object that stores all stochastic objectives or constraints for a given design point.
-#
-#     :param method_result: optionally carries whatever the UQ method produced beyond the samples themselves; for polynomial
-#     chaos that is the list of `ot.FunctionalChaosResult`s, from which for example Sobol indices can be obtained.
-#     """
-#
-#     def __init__(self, outputs: List[StochasticOutput], method_result=None):
-#         self.outputs = outputs
-#         self.method_result = method_result
 
 class Scalarization:
     """
@@ -208,7 +167,7 @@ class Scalarization:
     - Margin
     - Quantile
     """
-    def reduce(self, output: StochasticOutput) -> float:
+    def scalarize(self, output: StochasticOutput) -> float:
         """Reduce an (n_samples x 1) sample of one response to a single value that the optimizer sees based on the optimization problem type."""
         raise NotImplementedError
 
@@ -216,7 +175,7 @@ class Scalarization:
 class Mean(Scalarization):
     """Minimize the expectation of the objective or constraint function for example min(E[F(x)])"""
 
-    def reduce(self, output: StochasticOutput) -> float:
+    def scalarize(self, output: StochasticOutput) -> float:
         return float(output.mean)
 
 class Margin(Scalarization):
@@ -235,7 +194,7 @@ class Margin(Scalarization):
         self.k = k
         self.direction = direction
 
-    def reduce(self, output: StochasticOutput) -> float:
+    def scalarize(self, output: StochasticOutput) -> float:
         return float(output.margin(self.k, self.direction))
 
 class Quantile(Scalarization):
@@ -254,7 +213,7 @@ class Quantile(Scalarization):
             raise ValueError(f'Quantile should be between 0 and 1: {q}')
         self.q = q
 
-    def reduce(self, output: StochasticOutput) -> float:
+    def scalarize(self, output: StochasticOutput) -> float:
         return float(output.quantile(self.q))
 
 class UQMethod:
