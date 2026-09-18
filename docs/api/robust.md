@@ -1,5 +1,13 @@
 # Stochastic Problem Definition
 
+Stochastic (robust) optimization uses [OpenTURNS](https://openturns.github.io/) for the uncertainty propagation,
+which is an optional dependency:
+
+```
+pip install sb-arch-opt[uncertainty]
+```
+
+
 ::: sb_arch_opt.stochastic_problem.StochasticArchOptProblem
     handler: python
     options:

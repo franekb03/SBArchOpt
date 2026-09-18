@@ -1,14 +1,26 @@
 import pytest
 import itertools
 import numpy as np
-import openturns as ot
 from typing import Optional, Tuple
 from sb_arch_opt.sampling import *
-from sb_arch_opt.uncertainty import *
 from sb_arch_opt.problems.problems_base import *
-from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
 from pymoo.core.variable import Real, Integer, Choice
 from pymoo.problems.multi.zdt import ZDT1
+
+try:
+    import openturns as ot
+    from sb_arch_opt.uncertainty import *
+    from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
+
+    HAS_UNCERTAINTY = True
+
+except ImportError:
+    HAS_UNCERTAINTY = False
+
+    # The stochastic problems below are still defined, so that the module imports; they are only constructed by
+    # tests that skip without OpenTURNS
+    class StochasticArchOptProblem:
+        pass
 
 
 class DummyProblem(ArchOptTestProblemBase):
@@ -103,7 +115,7 @@ def failing_problem():
     return DummyProblem(fail=True)
 
 
-def make_space(*distributions) -> StochasticParameterSpace:
+def make_space(*distributions) -> 'StochasticParameterSpace':
     return StochasticParameterSpace([StochasticParameter(f'u{i}', dist) for i, dist in enumerate(distributions)])
 
 

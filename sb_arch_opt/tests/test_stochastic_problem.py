@@ -1,12 +1,17 @@
 import pytest
 import numpy as np
-import openturns as ot
-from sb_arch_opt.uncertainty import *
-from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
-from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenbrock
-from sb_arch_opt.tests.conftest import (VectorizedProblem, HierarchicalProblem, DeterministicResponseProblem,
-                                        make_space)
+from sb_arch_opt.tests.conftest import (HAS_UNCERTAINTY, VectorizedProblem, HierarchicalProblem,
+                                        DeterministicResponseProblem, make_space)
 from pymoo.core.variable import Real
+
+pytestmark = pytest.mark.skipif(not HAS_UNCERTAINTY, reason='OpenTURNS dependency not installed: '
+                                                            'pip install sb-arch-opt[uncertainty]')
+
+if HAS_UNCERTAINTY:
+    import openturns as ot
+    from sb_arch_opt.uncertainty import *
+    from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
+    from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenbrock
 
 
 def _output(values):
@@ -78,8 +83,9 @@ def test_custom_scalar():
     assert InterQuartileRange().scalarize(_output(np.linspace(0., 10., 101))) == pytest.approx(5., abs=.5)
 
 
-@pytest.mark.parametrize('method_class', [MonteCarlo, PolynomialChaos])
-def test_uq_method_samples(method_class):
+@pytest.mark.parametrize('method_name', ['MonteCarlo', 'PolynomialChaos'])
+def test_uq_method_samples(method_name):
+    method_class = {'MonteCarlo': MonteCarlo, 'PolynomialChaos': PolynomialChaos}[method_name]
     space = make_space(ot.Normal(0., 1.), ot.Normal(0., 1.))
     method = method_class(n_evaluations=40, seed=42)
 
@@ -271,8 +277,9 @@ def test_stochastic_output_statistics():
     assert str(out) == f'(mean = {out.mean:.4g}, sigma = {out.std:.4g})'
 
 
-@pytest.mark.parametrize('uq_method', [MonteCarlo(50, seed=3), PolynomialChaos(50, seed=3)])
-def test_a_response_that_does_not_depend_on_the_parameters(uq_method):
+@pytest.mark.parametrize('method_name', ['MonteCarlo', 'PolynomialChaos'])
+def test_a_response_that_does_not_depend_on_the_parameters(method_name):
+    uq_method = {'MonteCarlo': MonteCarlo, 'PolynomialChaos': PolynomialChaos}[method_name](50, seed=3)
     # A response that is constant over the realizations has no distribution to fit: it is reported as the value
     # itself, so no scalarization can add a margin to it
     problem = DeterministicResponseProblem(uq_method=uq_method, obj_scalar=[Mean(), Margin(k=2.)])
