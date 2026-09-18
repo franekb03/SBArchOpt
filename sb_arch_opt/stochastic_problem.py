@@ -163,15 +163,15 @@ class StochasticArchOptProblem(ArchOptProblemBase):
             for f_i, output in enumerate(outputs[:n_f]):
                 f_stoch_out[x_i, f_i] = output
                 obj_scalar = self.obj_scalar[f_i]
-                f_out[x_i, f_i] = output.scalarize(obj_scalar) if not isinstance(output, float) else output
+                f_out[x_i, f_i] = obj_scalar.scalarize(output) if not isinstance(output, float) else output
             for g_i, output in enumerate(outputs[n_f:n_f+n_g]):
                 g_stoch_out[x_i, g_i] = output
                 ieq_constr_scalar = self.ieq_constr_scalar[g_i]
-                g_out[x_i, g_i] = output.scalarize(ieq_constr_scalar) if not isinstance(output, float) else output
+                g_out[x_i, g_i] = ieq_constr_scalar.scalarize(output) if not isinstance(output, float) else output
             for h_i, output in enumerate(outputs[n_f+n_g:]):
                 h_stoch_out[x_i, h_i] = output
                 eq_constr_scalar = self.eq_constr_scalar[h_i]
-                h_out[x_i, h_i] = output.scalarize(eq_constr_scalar) if not isinstance(output, float) else output
+                h_out[x_i, h_i] = eq_constr_scalar.scalarize(output) if not isinstance(output, float) else output
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, parameters: np.ndarray, *args, **kwargs):

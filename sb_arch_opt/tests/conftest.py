@@ -180,6 +180,24 @@ class AllResponseKindsProblem(StochasticArchOptProblem):
         h_out[:, 0] = parameters[0] * x[:, 0]
 
 
+class DeterministicResponseProblem(StochasticArchOptProblem):
+    """Two objectives, of which the second does not depend on the stochastic parameters at all"""
+
+    def __init__(self, uq_method=None, **kwargs):
+        super().__init__([Real(bounds=(0., 1.))], param_space=make_space(ot.Normal(1., .2)),
+                         uq_method=uq_method or MonteCarlo(50, seed=3), n_obj=2, **kwargs)
+
+    def _is_conditionally_active(self):
+        return [False]
+
+    def _correct_x(self, x, is_active):
+        pass
+
+    def _arch_evaluate_sample(self, x, is_active, f_out, g_out, h_out, parameters, *args, **kwargs):
+        f_out[:, 0] = parameters[0] * x[:, 0]
+        f_out[:, 1] = 2. * x[:, 0]
+
+
 @pytest.fixture
 def stochastic_problem():
     return VectorizedProblem()
@@ -193,6 +211,11 @@ def hierarchical_problem():
 @pytest.fixture
 def all_response_kinds_problem():
     return AllResponseKindsProblem()
+
+
+@pytest.fixture
+def deterministic_response_problem():
+    return DeterministicResponseProblem()
 
 
 def pytest_sessionstart(session):
