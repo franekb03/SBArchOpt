@@ -1,15 +1,21 @@
 import pytest
 import numpy as np
-import openturns as ot
-from sb_arch_opt.uncertainty import *
-from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
-from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenbrock
-from sb_arch_opt.tests.conftest import VectorizedProblem, HierarchicalProblem, make_space
+from sb_arch_opt.tests.conftest import (HAS_UNCERTAINTY, VectorizedProblem, HierarchicalProblem,
+                                        DeterministicResponseProblem, make_space)
 from pymoo.core.variable import Real
+
+pytestmark = pytest.mark.skipif(not HAS_UNCERTAINTY, reason='OpenTURNS dependency not installed: '
+                                                            'pip install sb-arch-opt[uncertainty]')
+
+if HAS_UNCERTAINTY:
+    import openturns as ot
+    from sb_arch_opt.uncertainty import *
+    from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
+    from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenbrock
 
 
 def _output(values):
-    return StochasticOutput(ot.Sample(np.array(values, dtype=float).reshape((-1, 1))))
+    return StochasticOutput.from_output_samples(ot.Sample(np.array(values, dtype=float).reshape((-1, 1))))
 
 
 def _n_occupied_strata(space, samples, i_param):
@@ -43,18 +49,18 @@ def test_scalars():
     out = _output([1., 2., 3., 4., 5.])
     mean, std = out.mean, out.std
 
-    assert out.scalarize(Mean()) == pytest.approx(mean)
-    assert out.scalarize(Quantile(q=.9)) == pytest.approx(out.quantile(.9))
-    assert out.scalarize(Margin(k=2.)) == pytest.approx(out.margin(2.))
+    assert Mean().scalarize(out) == pytest.approx(mean)
+    assert Quantile(q=.9).scalarize(out) == pytest.approx(out.quantile(.9))
+    assert Margin(k=2.).scalarize(out) == pytest.approx(out.margin(2.))
 
     # The margin is the conservative value, so which tail that is depends on the direction
-    assert out.scalarize(Margin(k=2.)) == pytest.approx(mean + 2. * std)
-    assert out.scalarize(Margin(k=2., direction=-1)) == pytest.approx(mean + 2. * std)
-    assert out.scalarize(Margin(k=2., direction=1)) == pytest.approx(mean - 2. * std)
+    assert Margin(k=2.).scalarize(out) == pytest.approx(mean + 2. * std)
+    assert Margin(k=2., direction=-1).scalarize(out) == pytest.approx(mean + 2. * std)
+    assert Margin(k=2., direction=1).scalarize(out) == pytest.approx(mean - 2. * std)
 
     # Each instance carries its own parameters
-    assert out.scalarize(Quantile(q=.5)) != out.scalarize(Quantile(q=.95))
-    assert out.scalarize(Margin(k=1.)) != out.scalarize(Margin(k=3.))
+    assert Quantile(q=.5).scalarize(out) != Quantile(q=.95).scalarize(out)
+    assert Margin(k=1.).scalarize(out) != Margin(k=3.).scalarize(out)
 
     with pytest.raises(ValueError):
         Quantile(q=2.)
@@ -64,20 +70,22 @@ def test_scalars_penalize_spread():
     wide, narrow = _output([1., 3., 5.]), _output([2.5, 3., 3.5])
     assert wide.mean == pytest.approx(narrow.mean)
 
-    assert narrow.scalarize(Margin(k=2.)) < wide.scalarize(Margin(k=2.))  # minimized: lower is better
-    assert narrow.scalarize(Margin(k=2., direction=1)) > wide.scalarize(Margin(k=2., direction=1))  # maximized
+    assert Margin(k=2.).scalarize(narrow) < Margin(k=2.).scalarize(wide)  # minimized: lower is better
+    assert Margin(k=2., direction=1).scalarize(narrow) > Margin(k=2., direction=1).scalarize(wide)  # maximized
 
 
 def test_custom_scalar():
-    class WorstCase(Scalarization):
+    # A scalarization is handed the whole StochasticOutput, so it can use anything the fitted distribution offers
+    class InterQuartileRange(Scalarization):
         def scalarize(self, output):
-            return float(output.getMax()[0])
+            return output.quantile(.75) - output.quantile(.25)
 
-    assert _output([1., 5., 3.]).scalarize(WorstCase()) == pytest.approx(5.)
+    assert InterQuartileRange().scalarize(_output(np.linspace(0., 10., 101))) == pytest.approx(5., abs=.5)
 
 
-@pytest.mark.parametrize('method_class', [MonteCarlo, PolynomialChaos])
-def test_uq_method_samples(method_class):
+@pytest.mark.parametrize('method_name', ['MonteCarlo', 'PolynomialChaos'])
+def test_uq_method_samples(method_name):
+    method_class = {'MonteCarlo': MonteCarlo, 'PolynomialChaos': PolynomialChaos}[method_name]
     space = make_space(ot.Normal(0., 1.), ot.Normal(0., 1.))
     method = method_class(n_evaluations=40, seed=42)
 
@@ -122,12 +130,11 @@ def test_process_results():
     space = make_space(ot.Normal(0., 1.))
     method = MonteCarlo(n_evaluations=3, seed=42)
 
-    result = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]), space)
+    outputs = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]), space)
 
-    assert isinstance(result, StochasticResults)
-    assert len(result.outputs) == 3  # one output per response column
-    assert [output.mean for output in result.outputs] == pytest.approx([2., 11., 21.])
-    assert result.method_result is None  # Monte Carlo has nothing beyond the samples
+    assert len(outputs) == 3  # one output per response column
+    assert [output.mean for output in outputs] == pytest.approx([2., 11., 21.])
+    assert all(output.method_results is None for output in outputs)  # Monte Carlo has nothing beyond the samples
 
 def test_user_only_implements_arch_evaluate_sample(stochastic_problem):
     out = stochastic_problem.evaluate(np.array([[1., 0.], [0., 0.]]), return_as_dictionary=True)
@@ -203,15 +210,14 @@ def test_hierarchical_problem_with_constraint(hierarchical_problem):
 def test_response_kinds_use_their_own_scalar(all_response_kinds_problem):
     problem = all_response_kinds_problem
     out = problem.evaluate(np.array([[.5]]), return_as_dictionary=True)
-    result = out['stochastic'][0]
 
-    assert len(result.outputs) == 3
-    assert out['F'][0, 0] == pytest.approx(result.outputs[0].scalarize(Mean()))
-    assert out['G'][0, 0] == pytest.approx(result.outputs[1].scalarize(Mean()))
-    assert out['H'][0, 0] == pytest.approx(result.outputs[2].scalarize(Margin(k=3.)))
+    # Each response kind is published in its own object array, laid out like F, G and H
+    assert out['F'][0, 0] == pytest.approx(Mean().scalarize(out['f_stochastic'][0, 0]))
+    assert out['G'][0, 0] == pytest.approx(Mean().scalarize(out['g_stochastic'][0, 0]))
+    assert out['H'][0, 0] == pytest.approx(Margin(k=3.).scalarize(out['h_stochastic'][0, 0]))
 
     # The equality constraint uses a margin, so it is above its own mean
-    assert out['H'][0, 0] > result.outputs[2].mean
+    assert out['H'][0, 0] > out['h_stochastic'][0, 0].mean
 
 
 def test_scalar_counts_checked_per_response_kind():
@@ -242,25 +248,21 @@ def test_problem_configuration_checks():
 def test_statistics_available_per_design_point(stochastic_problem):
     out = stochastic_problem.evaluate(np.array([[1., 0.], [0., 0.]]), return_as_dictionary=True)
 
-    assert len(out['stochastic']) == 2
-    for result in out['stochastic']:
-        assert isinstance(result, StochasticResults)
-        assert len(result.outputs) == 1
-        assert len(result.outputs[0].to_numpy()) == 100
+    assert out['f_stochastic'].shape == (2, 1)
+    assert all(isinstance(output, StochasticOutput) for output in out['f_stochastic'].ravel())
+    assert out['g_stochastic'].shape == (2, 0)
 
     # The realizations really reach the model, so the response scatters
-    values = out['stochastic'][0].outputs[0].to_numpy()
-    assert len(set(values.tolist())) == 100
-    assert values.std() > 0.
+    for output in out['f_stochastic'][:, 0]:
+        assert output.std > 0.
 
 
 def test_reported_statistics_reproduce_the_reduced_value():
     problem = VectorizedProblem(n=200, obj_scalar=[Margin(k=2.)])
     out = problem.evaluate(np.array([[1., 0.], [.5, .5]]), return_as_dictionary=True)
 
-    for i, result in enumerate(out['stochastic']):
-        output = result.outputs[0]
-        assert out['F'][i, 0] == pytest.approx(output.scalarize(Margin(k=2.)))
+    for i, output in enumerate(out['f_stochastic'][:, 0]):
+        assert out['F'][i, 0] == pytest.approx(Margin(k=2.).scalarize(output))
         assert out['F'][i, 0] == pytest.approx(output.mean + 2.*output.std)
 
 
@@ -268,11 +270,32 @@ def test_stochastic_output_statistics():
     out = _output(np.linspace(0., 10., 101))
 
     assert out.mean == pytest.approx(5.)
-    assert out.var == pytest.approx(out.std**2)
+    # The kernel widens the fitted distribution slightly compared to the samples it was built from
+    assert out.std == pytest.approx(np.std(np.linspace(0., 10., 101)), rel=.1)
     assert out.quantile(.5) == pytest.approx(5., abs=.1)
-    assert out.prob_exceeds(5.) == pytest.approx(.5, abs=.02)
-    assert len(out.to_numpy()) == 101
-    assert out.to_distribution.computeCDF(5.) == pytest.approx(.5, abs=.05)
+    assert out.distribution.computeCDF(5.) == pytest.approx(.5, abs=.05)
+    assert str(out) == f'(mean = {out.mean:.4g}, sigma = {out.std:.4g})'
+
+
+@pytest.mark.parametrize('method_name', ['MonteCarlo', 'PolynomialChaos'])
+def test_a_response_that_does_not_depend_on_the_parameters(method_name):
+    uq_method = {'MonteCarlo': MonteCarlo, 'PolynomialChaos': PolynomialChaos}[method_name](50, seed=3)
+    # A response that is constant over the realizations has no distribution to fit: it is reported as the value
+    # itself, so no scalarization can add a margin to it
+    problem = DeterministicResponseProblem(uq_method=uq_method, obj_scalar=[Mean(), Margin(k=2.)])
+    out = problem.evaluate(np.array([[.5], [1.]]), return_as_dictionary=True)
+
+    assert np.all(np.isfinite(out['F']))
+    assert not problem.get_failed_points(out).any()
+
+    for i, x_i in enumerate([.5, 1.]):
+        varying, constant = out['f_stochastic'][i, :]
+        assert isinstance(varying, StochasticOutput)
+        assert varying.std > 0.
+
+        assert isinstance(constant, float)
+        assert constant == pytest.approx(2.*x_i)
+        assert out['F'][i, 1] == pytest.approx(2.*x_i)
 
 
 def test_a_failed_sample_fails_the_design_point():
@@ -281,8 +304,8 @@ def test_a_failed_sample_fails_the_design_point():
     problem = VectorizedProblem(n=50, fail=True)
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
 
-    values = out['stochastic'][0].outputs[0].to_numpy()
-    assert np.any(~np.isfinite(values))
+    # There is no distribution to fit, so the response comes back as NaN rather than as an output
+    assert not np.isfinite(out['f_stochastic'][0, 0])
     assert not np.isfinite(out['F'][0, 0])
     assert problem.get_failed_points(out)[0]
 
@@ -310,8 +333,8 @@ def test_pce_through_the_problem():
     assert np.all(np.isfinite(out['F']))
     assert np.allclose(out['F'], problem.evaluate(x, return_as_dictionary=True)['F'])
 
-    # Statistics come from the cheap metamodel, not from the 50 expensive evaluations
-    assert len(out['stochastic'][0].outputs[0].to_numpy()) == problem.uq_method.n_metamodel_samples
+    # Statistics come from the fitted expansion, not from the 50 expensive evaluations
+    assert isinstance(out['f_stochastic'][0, 0].method_results, ot.FunctionalChaosResult)
 
 
 def test_pce_terms_and_sample_requirement():
@@ -328,20 +351,19 @@ def test_pce_provides_chaos_result_for_sensitivity_analysis():
     problem = VectorizedProblem(uq_method=PolynomialChaos(50, seed=42), obj_scalar=[Mean()])
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
 
-    chaos_results = out['stochastic'][0].method_result
-    assert len(chaos_results) == 1
-    assert isinstance(chaos_results[0], ot.FunctionalChaosResult)
+    chaos_result = out['f_stochastic'][0, 0].method_results
+    assert isinstance(chaos_result, ot.FunctionalChaosResult)
 
-    sobol = ot.FunctionalChaosSobolIndices(chaos_results[0])
+    sobol = ot.FunctionalChaosSobolIndices(chaos_result)
     assert sobol.getSobolIndex(0) == pytest.approx(1., abs=1e-6)  # a single parameter explains everything
 
 
-def test_pce_falls_back_to_raw_samples_when_evaluations_fail():
+def test_pce_fails_the_design_point_when_evaluations_fail():
     # A response with failed evaluations cannot be fitted; the design point then fails as usual
     problem = VectorizedProblem(uq_method=PolynomialChaos(50, seed=42), obj_scalar=[Mean()], fail=True)
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
 
-    assert out['stochastic'][0].method_result[0] is None
+    assert not np.isfinite(out['f_stochastic'][0, 0])
     assert not np.isfinite(out['F'][0, 0])
 
 

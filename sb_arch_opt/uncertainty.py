@@ -28,7 +28,7 @@ import openturns as ot
 import numpy as np
 
 __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
-           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos']
+           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput']
 
 EvaluationOutput = Union['StochasticOutput', float]
 
@@ -46,7 +46,7 @@ class StochasticParameter:
      :param ref: Optional reference object used for matching with the related class
      """
 
-    def __init__(self, name, value: ot.DistributionImplementation, ref=None):
+    def __init__(self, name, value, ref=None):
         self.name = name
         self.value = value
         self.ref = ref
