@@ -208,7 +208,7 @@ def test_stochastic_output_statistics():
     # The kernel widens the fitted distribution slightly compared to the samples it was built from
     assert out.std == pytest.approx(np.std(np.linspace(0., 10., 101)), rel=.1)
     assert out.quantile(.5) == pytest.approx(5., abs=.1)
-    assert out.distribution.computeCDF(5.) == pytest.approx(.5, abs=.05)
+    assert out.dist.computeCDF(5.) == pytest.approx(.5, abs=.05)
     assert str(out) == f'(mean = {out.mean:.4g}, sigma = {out.std:.4g})'
 
 

@@ -71,19 +71,19 @@ class StochasticArchOptProblem(ArchOptProblemBase):
     A failed evaluation (NaN) in any realization fails the whole design point: `scalarize` returns NaN,
     which is how SBArchOpt treats hidden-constraint violations elsewhere.
 
-    After each evaluation the fitted response distributions are published in the pymoo output dictionary as
-    `StochasticOutput` objects, in `out['f_stochastic']`, `out['g_stochastic']` and `out['h_stochastic']`, each
-    an (n_design_points x n_responses) object array laid out like `out['F']`, `out['G']` and `out['H']`.
+    After each evaluation the fitted response distributions are stored in the pymoo output dictionary as
+    `StochasticOutput` objects, in `out['f_stochastic']`, `out['g_stochastic']` and `out['h_stochastic'].
     For polynomial chaos each output also carries the fitted expansion (`method_results`), from which Sobol
-    indices can be obtained.
+    indices can be obtained. If the output turns out to be deterministic after evaluation, a float is stored instead of a
+    'StochasticOutput' object.
     """
 
     def __init__(self, des_vars: Union[List[Variable], ArchDesignSpace],
                  param_space: StochasticParameterSpace,
                  uq_method: UQMethod, n_obj=1, n_ieq_constr=0, n_eq_constr=0,
-                 obj_scalar: List[Scalarization] = None,
-                 ieq_constr_scalar: List[Scalarization] = None,
-                 eq_constr_scalar: List[Scalarization] = None,
+                 obj_scalar: Optional[List[Scalarization]] = None,
+                 ieq_constr_scalar: Optional[List[Scalarization]] = None,
+                 eq_constr_scalar: Optional[List[Scalarization]] = None,
                  **kwargs):
 
         self.obj_scalar = self.check_scalars(obj_scalar, n_obj)

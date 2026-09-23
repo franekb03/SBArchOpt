@@ -39,7 +39,6 @@ nav:
     - 'HEBO': 'api/hebo.md'
     - 'SEGOMOE': 'api/segomoe.md'
     - 'SMARTy': 'api/smarty.md'
-    - 'Uncertainty Quantification': 'api/uqmethod.md'
 
 markdown_extensions:
   - pymdownx.highlight:
