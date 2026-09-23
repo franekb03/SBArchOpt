@@ -118,6 +118,16 @@ class StochasticArchOptProblem(ArchOptProblemBase):
                 raise ValueError(f'scalars should contain Scalarization instances, got: {scalar!r}')
         return list(scalars)
 
+    def _print_extra_stats(self):
+        print(f'stochastic   : True')
+        print(f'n_params     : {self.param_space.n_parameters}')
+        print(f'uq_method    : {self.uq_method}')
+        print(f'n_evaluations: {self.uq_method.n_evaluations}')
+        print(f'obj          : {self.obj_scalar}')
+        print(f'ieq_constr   : {self.ieq_constr_scalar}')
+        print(f'ieq_constr   : {self.eq_constr_scalar}')
+
+
     def _evaluate(self, x, out, *args, **kwargs):
         n = x.shape[0]
         f_stoch = np.empty((n, self.n_obj), dtype=object)

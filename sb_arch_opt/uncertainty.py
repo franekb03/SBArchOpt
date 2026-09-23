@@ -177,12 +177,24 @@ class Scalarization:
         """Reduce an (n_samples x 1) sample of one response to a single value that the optimizer sees based on the optimization problem type."""
         raise NotImplementedError
 
+    def __repr__(self):
+        raise NotImplementedError
+
+    def __str__(self):
+        raise NotImplementedError
+
 
 class Mean(Scalarization):
     """Minimize the expectation of the objective or constraint function for example min(E[F(x)])"""
 
     def scalarize(self, output: StochasticOutput) -> float:
         return float(output.mean)
+
+    def __repr__(self):
+        return "Mean"
+
+    def __str__(self):
+        return "Mean"
 
 
 class Margin(Scalarization):
@@ -204,6 +216,12 @@ class Margin(Scalarization):
     def scalarize(self, output: StochasticOutput) -> float:
         return float(output.margin(self.k, self.direction))
 
+    def __repr__(self):
+        return f"Margin with k = {self.k}"
+
+    def __str__(self):
+        return f"Margin with k = {self.k}"
+
 
 class Quantile(Scalarization):
     """
@@ -223,6 +241,12 @@ class Quantile(Scalarization):
 
     def scalarize(self, output: StochasticOutput) -> float:
         return float(output.quantile(self.q))
+
+    def __repr__(self):
+        return f"Quantile with q = {self.q}"
+
+    def __str__(self):
+        return f"Quantile with q = {self.q}"
 
 
 class UQMethod:
@@ -276,6 +300,9 @@ class UQMethod:
         """
         raise NotImplementedError
 
+    def __str__(self) -> str:
+        raise NotImplementedError
+
 
 class MonteCarlo(UQMethod):
     """
@@ -296,6 +323,9 @@ class MonteCarlo(UQMethod):
         sample = ot.Sample(results)
         outputs = [StochasticOutput.from_output_samples(sample[:, i]) for i in range(results.shape[1])]
         return outputs
+
+    def __str__(self) -> str:
+        return 'Monte Carlo'
 
 
 class PolynomialChaos(UQMethod):
@@ -380,3 +410,6 @@ class PolynomialChaos(UQMethod):
 
             outputs.append(StochasticOutput.from_output_samples(samples, chaos_result))
         return outputs
+
+    def __str__(self) -> str:
+        return 'Polynomial Chaos Expansion'
