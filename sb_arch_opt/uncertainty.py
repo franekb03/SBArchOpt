@@ -178,10 +178,10 @@ class Scalarization:
         raise NotImplementedError
 
     def __repr__(self):
-        raise NotImplementedError
+        return self.__class__.__name__
 
     def __str__(self):
-        raise NotImplementedError
+        return repr(self)
 
 
 class Mean(Scalarization):
@@ -301,7 +301,7 @@ class UQMethod:
         raise NotImplementedError
 
     def __str__(self) -> str:
-        raise NotImplementedError
+        return self.__class__.__name__
 
 
 class MonteCarlo(UQMethod):

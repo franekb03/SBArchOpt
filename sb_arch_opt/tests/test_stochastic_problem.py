@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from sb_arch_opt.tests.conftest import (HAS_UNCERTAINTY, VectorizedProblem, HierarchicalProblem,
-                                        DeterministicResponseProblem, make_space)
+                                        DeterministicResponseProblem, AllResponseKindsProblem, make_space)
 from pymoo.core.variable import Real
 
 pytestmark = pytest.mark.skipif(not HAS_UNCERTAINTY, reason='OpenTURNS dependency not installed: '
@@ -167,6 +167,23 @@ def test_response_kinds_use_their_own_scalar(all_response_kinds_problem):
 
     # The equality constraint uses a margin, so it is above its own mean
     assert out['H'][0, 0] > out['h_stochastic'][0, 0].mean
+
+
+def test_print_stats_with_custom_scalars_and_uq_method(capsys):
+    class WorstCase(Scalarization):  # A user-defined scalar, without a __repr__ of its own
+
+        def scalarize(self, output: StochasticOutput) -> float:
+            return float(output.quantile(.99))
+
+    problem = AllResponseKindsProblem(obj_scalar=[WorstCase()], ieq_constr_scalar=[Quantile(q=.9)])
+    problem.print_stats()
+    stats = capsys.readouterr().out
+
+    assert 'obj          : [WorstCase]' in stats
+    assert 'ieq_constr   : [Quantile with q = 0.9]' in stats
+    assert 'eq_constr    : [Margin with k = 3.0]' in stats
+    assert 'uq_method    : Monte Carlo' in stats
+    assert str(UQMethod(10)) == 'UQMethod'
 
 
 def test_scalar_counts_checked_per_response_kind():

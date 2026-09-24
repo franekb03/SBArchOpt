@@ -125,7 +125,7 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         print(f'n_evaluations: {self.uq_method.n_evaluations}')
         print(f'obj          : {self.obj_scalar}')
         print(f'ieq_constr   : {self.ieq_constr_scalar}')
-        print(f'ieq_constr   : {self.eq_constr_scalar}')
+        print(f'eq_constr    : {self.eq_constr_scalar}')
 
 
     def _evaluate(self, x, out, *args, **kwargs):
