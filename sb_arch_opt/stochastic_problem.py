@@ -119,13 +119,13 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         return list(scalars)
 
     def _print_extra_stats(self):
-        print(f'stochastic   : True')
-        print(f'n_params     : {self.param_space.n_parameters}')
-        print(f'uq_method    : {self.uq_method}')
-        print(f'n_evaluations: {self.uq_method.n_evaluations}')
-        print(f'obj          : {self.obj_scalar}')
-        print(f'ieq_constr   : {self.ieq_constr_scalar}')
-        print(f'eq_constr   : {self.eq_constr_scalar}')
+        print(f'stochastic           : True')
+        print(f'n_stochastic_params  : {self.param_space.n_parameters}')
+        print(f'uq_method            : {self.uq_method}')
+        print(f'n_uq_samples         : {self.uq_method.n_evaluations}')
+        print(f'obj_scalarize        : {self.obj_scalar}')
+        print(f'ieq_constr_scalarize : {self.ieq_constr_scalar}')
+        print(f'eq_constr_scalarize  : {self.eq_constr_scalar}')
 
 
     def _evaluate(self, x, out, *args, **kwargs):
