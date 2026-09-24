@@ -17,8 +17,6 @@ try:
 except ImportError:
     HAS_UNCERTAINTY = False
 
-    # The stochastic problems below are still defined, so that the module imports; they are only constructed by
-    # tests that skip without OpenTURNS
     class StochasticArchOptProblem:
         pass
 

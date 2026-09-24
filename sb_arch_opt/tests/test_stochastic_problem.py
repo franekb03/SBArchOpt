@@ -2,7 +2,6 @@ import pytest
 import numpy as np
 from sb_arch_opt.tests.conftest import (HAS_UNCERTAINTY, VectorizedProblem, HierarchicalProblem,
                                         DeterministicResponseProblem, make_space)
-from pymoo.core.variable import Real
 
 pytestmark = pytest.mark.skipif(not HAS_UNCERTAINTY, reason='OpenTURNS dependency not installed: '
                                                             'pip install sb-arch-opt[uncertainty]')
