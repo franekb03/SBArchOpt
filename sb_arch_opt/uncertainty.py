@@ -31,7 +31,7 @@ __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter',
            'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput']
 
 EvaluationOutput = Union['StochasticOutput', float]
-
+"""Output either distribution or numeric value."""
 
 class StochasticParameter:
     """
@@ -161,8 +161,11 @@ class StochasticOutput:
     def margin(self, k: float = 1.645, direction: int =-1) -> float:
         return self.mean - np.sign(direction) * k * self.std
 
-    def __str__(self):
+    def __repr__(self):
         return f"(mean = {self.mean:.4g}, sigma = {self.std:.4g})"
+
+    def __str__(self):
+        return repr(self)
 
 
 class Scalarization:
@@ -178,10 +181,10 @@ class Scalarization:
         raise NotImplementedError
 
     def __repr__(self):
-        raise NotImplementedError
+        return self.__class__.__name__
 
     def __str__(self):
-        raise NotImplementedError
+        return repr(self)
 
 
 class Mean(Scalarization):
@@ -189,12 +192,6 @@ class Mean(Scalarization):
 
     def scalarize(self, output: StochasticOutput) -> float:
         return float(output.mean)
-
-    def __repr__(self):
-        return "Mean"
-
-    def __str__(self):
-        return "Mean"
 
 
 class Margin(Scalarization):
@@ -219,9 +216,6 @@ class Margin(Scalarization):
     def __repr__(self):
         return f"Margin with k = {self.k}"
 
-    def __str__(self):
-        return f"Margin with k = {self.k}"
-
 
 class Quantile(Scalarization):
     """
@@ -243,9 +237,6 @@ class Quantile(Scalarization):
         return float(output.quantile(self.q))
 
     def __repr__(self):
-        return f"Quantile with q = {self.q}"
-
-    def __str__(self):
         return f"Quantile with q = {self.q}"
 
 
@@ -300,8 +291,11 @@ class UQMethod:
         """
         raise NotImplementedError
 
-    def __str__(self) -> str:
-        raise NotImplementedError
+    def __repr__(self) -> str:
+        return self.__class__.__name__
+
+    def __str__(self):
+        return repr(self)
 
 
 class MonteCarlo(UQMethod):
@@ -324,7 +318,7 @@ class MonteCarlo(UQMethod):
         outputs = [StochasticOutput.from_output_samples(sample[:, i]) for i in range(results.shape[1])]
         return outputs
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return 'Monte Carlo'
 
 
@@ -411,5 +405,5 @@ class PolynomialChaos(UQMethod):
             outputs.append(StochasticOutput.from_output_samples(samples, chaos_result))
         return outputs
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return 'Polynomial Chaos Expansion'

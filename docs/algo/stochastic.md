@@ -10,19 +10,20 @@ SBArchOpt supports this by evaluating each design point for many realizations of
 the resulting response distributions to the single values the optimizer sees.
 The problem is defined with a `StochasticArchOptProblem`, a subclass of`ArchOptProblemBase`, so
 a stochastic problem can be solved with pymoo, ArchSBO, or any of the connected optimization frameworks. 
-Note that one design point now costs `n_evaluations` evaluations of the underlying model, 
-which makes Surrogate-Based Optimization (SBO) especially relevant here.
+Each design points costs additional `n_evaluations` evaluations of the underlying model, 
+which makes Surrogate-Based Optimization (SBO) especially attractive to reduce the number of design points .
 
-Uncertainty propagation is done using [OpenTURNS](https://openturns.github.io/).
+To facilitate uncertainty quantification, sampling and distribution storage, SBArchOpt uses 
+the objects defined in [OpenTURNS](https://openturns.github.io/).
 
 Three things are defined on top of the design variables:
 
-- A `StochasticParameterSpace`: the joint distribution of the uncertain parameters, assumed to be independent. These
+- A `StochasticParameterSpace`: the joint distribution of the uncertain parameters, assumed to be independent. They
   influence the evaluation but are not chosen by the optimizer, and therefore are NOT design variables.
-- A `UQMethod` (`MonteCarlo` or `PolynomialChaos`): which realizations to evaluate, and how to turn the responses into
-  statistics. It is given a budget of `n_evaluations` expensive evaluations per design point.
-- A `Scalarization` per objective and constraint (`Mean`, `Margin` or `Quantile`): which statistic of the response the
-  optimizer sees. If not specified, responses default to `Mean`.
+- A `UQMethod` (`MonteCarlo` or `PolynomialChaos`): handles the uncertainty propagation, 
+  and turning the responses into statistics. It is given a budget of `n_evaluations` expensive evaluations per design point.
+- A `Scalarization` per objective and constraint (`Mean`, `Margin` or `Quantile`): scalarizes the output distribution to 
+  a single number that optimizer sees. If not specified, responses default to `Mean`.
 
 ## Installation
 
@@ -35,8 +36,8 @@ pip install sb-arch-opt[uncertainty]
 [API Reference](../api/robust.md)
 
 A stochastic problem is a subclass of `StochasticArchOptProblem`, which extends `ArchOptProblemBase`. Compared to a
-deterministic problem, evaluation is implemented in `_arch_evaluate_sample` instead of `_arch_evaluate`: this function
-is called once per realization, receives that realization in `parameters`, and writes the responses for that
+deterministic problem, evaluation is implemented in `_arch_evaluate_sample` instead of `_arch_evaluate`. This method
+is called once per realization, receives it in `parameters`, and writes the responses for that
 realization. The class automatically handles the loop over the sample realizations, output distribution construction
 and the scalarization to `f`, `g` and `h` for the the optimizer.
 
@@ -69,7 +70,7 @@ class MyStochasticProblem(StochasticArchOptProblem):
         super().__init__(
             [Real(bounds=(-2., 2.))],
             param_space=param_space,
-            uq_method=MonteCarlo(n_evaluations=100, seed=42),
+            uq_method=MonteCarlo(n_evaluations=1000, seed=42),
             n_obj=1, obj_scalar=[Mean()],
         )
 
@@ -97,17 +98,19 @@ optimizer sees NaN, which is how SBArchOpt treats hidden constraint violations e
 Both methods draw samples from the parameter space using Latin Hypercube Sampling (LHS) 
 and use the same number of expensive model evaluations per design point. 
 They differ in how the statistics are obtained: Monte Carlo computes them directly from the sampled model outputs,
-while PCE first fits a polynomial chaos expansion to those outputs and derives the statistics from its coefficients.
-In general Monte Carlo requires more simulation code executions to compute the statistics compared to PCE.
-More UQ methods can be implemented by creating a new subclass of `UQMethod`. 
+while PCE first fits a polynomial chaos expansion to those outputs and derives the statistics by performing 
+Monte Carlo on the trained cheap surrogate model. In general Monte Carlo requires more simulation code executions 
+to compute the statistics compared to PCE. More UQ methods can be implemented by creating a new subclass of `UQMethod`. 
 
 - `MonteCarlo`: the statistics are computed from the `n_evaluations` responses directly. It is the simplest method to
    implement, but slowest to converge.
 - `PolynomialChaos`: a polynomial chaos expansion of each response as a function of the uncertain parameters is fitted
-  from the `n_evaluations` responses, and the statistics are then taken from `n_metamodel_samples` cheap evaluations of
-  that expansion. Sampling the trained surrogate model is much cheaper than running the real simulation code,
-  which makes this method attractive for expensive evaluation codes. A degree `d` expansion in `n` parameters needs a minimum
-  number of evaluations to be fitted, which is checked when drawing the design.
+  from the `n_evaluations` responses, and the statistics are then taken from `n_metamodel_samples` cheap evaluations. 
+  Sampling the trained surrogate model is much cheaper than running the real simulation code,
+  which makes this method attractive for expensive evaluation codes. The PCE surrogate model is trained
+  with the least-squares method that requires at least `P` samples, but it is commonly recommended to provide 
+  between `2P` and `3P`, where `P = (n+d)! / (n! d!)` is the number of polynomial terms for `n` parameters and polynomial 
+  degree `d` (Blatman, 2009).
 
 ### Scalarization
 
@@ -149,3 +152,8 @@ import openturns as ot
 sobol = ot.FunctionalChaosSobolIndices(output.method_results)
 first_order_u0 = sobol.getSobolIndex(0)
 ```
+
+## References
+- Blatman, G. (2009). *Adaptive sparse polynomial chaos expansions for uncertainty
+  propagation and sensitivity analysis*. PhD thesis, Université Blaise Pascal,
+  Clermont-Ferrand, France.
