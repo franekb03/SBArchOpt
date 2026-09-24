@@ -36,15 +36,54 @@ __all__ = ['StochasticArchOptProblem']
 
 class StochasticArchOptProblem(ArchOptProblemBase):
     """
-    Base class for a stochastic (robust) architecture optimization problem.
+    Base class for a stochastic (robust) architecture optimization problem. It extends the ArchOptProblemBase class
+    with support for stochastic optimization problems.
+
+    Stochastic problem evaluates design vector for many realizations of the uncertain parameters and
+    reduces the resulting distribution of each response to the single value the optimizer sees.
+    Three things are therefore needed on top of the design variables:
+
+    - `param_space`: a `StochasticParameterSpace`, the joint distribution of the uncertain parameters. These are
+     quantities that influence the evaluation but are not chosen by the optimizer, so they are NOT design
+     variables.
+    - `uq_method`: a `UQMethod` (`MonteCarlo`, `PolynomialChaos`) that decides which realizations to evaluate and
+     how to turn the responses into statistics. It is given a budget of `n_evaluations` expensive evaluations per
+     design point.
+    - a `Scalarization` per response, below.
+
+    Requires specifying a type of optimization problem for each objective and constraint by providing a child
+    instance of Scalarization object:
+
+    - Mean: Minimize the expectation of the objective or constraint function
+     --> for example min(E[F(x)])
+    - Margin: Gaussian output distribution expected. Minimize for the objective or constraint function for a given
+     confidence interval.
+     --> min(E[F(x)] + k*sigma[F(x)]); The default k=1.645 is the one-sided 95% interval of a normal distribution.
+    - Quantile: Makes no distributional assumption. Minimize the q quantile of the objective or constraint
+     function --> min(F_q(x)), with q=0.95 by default.
+
+    When type of optimization problem is not provided, the response defaults to `Mean()`.
+
+    Implement `_arch_evaluate_sample`: it is called once per realization. All design points in a batch see the same
+    realizations (common random numbers), so they stay comparable to each other and to a surrogate fitted through
+    them.
+
+    A failed evaluation (NaN) in any realization fails the whole design point: `scalarize` returns NaN,
+    which is how SBArchOpt treats hidden-constraint violations elsewhere.
+
+    After each evaluation the fitted response distributions are stored in the pymoo output dictionary as
+    `StochasticOutput` objects, in `out['f_stochastic']`, `out['g_stochastic']` and `out['h_stochastic'].
+    For polynomial chaos each output also carries the fitted expansion (`method_results`), from which Sobol
+    indices can be obtained. If the output turns out to be deterministic after evaluation, a float is stored instead of a
+    'StochasticOutput' object.
     """
 
     def __init__(self, des_vars: Union[List[Variable], ArchDesignSpace],
                  param_space: StochasticParameterSpace,
                  uq_method: UQMethod, n_obj=1, n_ieq_constr=0, n_eq_constr=0,
-                 obj_scalar: List[Scalarization] = None,
-                 ieq_constr_scalar: List[Scalarization] = None,
-                 eq_constr_scalar: List[Scalarization] = None,
+                 obj_scalar: Optional[List[Scalarization]] = None,
+                 ieq_constr_scalar: Optional[List[Scalarization]] = None,
+                 eq_constr_scalar: Optional[List[Scalarization]] = None,
                  **kwargs):
 
         self.obj_scalar = self.check_scalars(obj_scalar, n_obj)
@@ -62,8 +101,6 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         self.param_space = param_space
         self.uq_method = uq_method
-        # List for storing stochastic results object for each design point
-        self.stochastic_results: List[StochasticResults] = []
 
         super().__init__(des_vars, n_obj=n_obj, n_ieq_constr=n_ieq_constr, n_eq_constr=n_eq_constr, **kwargs)
 
@@ -81,16 +118,31 @@ class StochasticArchOptProblem(ArchOptProblemBase):
                 raise ValueError(f'scalars should contain Scalarization instances, got: {scalar!r}')
         return list(scalars)
 
-    def _evaluate(self, x, out, *args, **kwargs):
-        # The pymoo outputs are processed by the parent method
-        super()._evaluate(x, out, *args, **kwargs)
+    def _print_extra_stats(self):
+        print(f'stochastic   : True')
+        print(f'n_params     : {self.param_space.n_parameters}')
+        print(f'uq_method    : {self.uq_method}')
+        print(f'n_evaluations: {self.uq_method.n_evaluations}')
+        print(f'obj          : {self.obj_scalar}')
+        print(f'ieq_constr   : {self.ieq_constr_scalar}')
+        print(f'eq_constr   : {self.eq_constr_scalar}')
 
-        # Add stochastic result to pymoo out dictionary.
-        if len(self.stochastic_results) == len(out['X']):
-            out['stochastic'] = list(self.stochastic_results)
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        n = x.shape[0]
+        f_stoch = np.empty((n, self.n_obj), dtype=object)
+        g_stoch = np.empty((n, self.n_ieq_constr), dtype=object)
+        h_stoch = np.empty((n, self.n_eq_constr), dtype=object)
+        kwargs.update(f_stoch_out=f_stoch, g_stoch_out=g_stoch, h_stoch_out=h_stoch)
+
+        super()._evaluate(x, out, *args, **kwargs)
+        out['f_stochastic'] = f_stoch
+        out['g_stochastic'] = g_stoch
+        out['h_stochastic'] = h_stoch
+
 
     def _arch_evaluate(self, x: np.ndarray, is_active_out: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
-                       h_out: np.ndarray, *args, **kwargs):
+                       h_out: np.ndarray, *args, f_stoch_out: np.ndarray=None, g_stoch_out: np.ndarray=None, h_stoch_out: np.ndarray=None, **kwargs):
         """
         Evaluate architecture for the provided design vectors and samples.
         Implement _arch_evaluate_sample to evaluate architecture for single samples realizations.
@@ -101,7 +153,6 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         # Get samples and include deterministic parameter values for evaluation
         samples = self.uq_method.get_samples(self.param_space)
-        # parameter_values = self.uq_method.param_space.include_deterministic_values(samples)
 
         n_x, n_s = x.shape[0], samples.shape[0]
 
@@ -111,23 +162,26 @@ class StochasticArchOptProblem(ArchOptProblemBase):
 
         # Evaluate all design vectors for each realization of the uncertain parameters
         for i in range(n_s):
-            self._arch_evaluate_sample(
-                x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], samples[i, :],*args, **kwargs)
+            self._arch_evaluate_sample(x, is_active_out, f_s[:, i, :], g_s[:, i, :], h_s[:, i, :], samples[i, :],*args, **kwargs)
 
         # Evaluate the stochastic result for all the evaluated design vectors and samples
-        self.stochastic_results = []
         for x_i in range(n_x):
-            results = self.uq_method.process_results(np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1), self.param_space)
-            self.stochastic_results.append(results)
+            outputs = self.uq_method.process_results(np.concatenate([f_s[x_i], g_s[x_i], h_s[x_i]], axis=1), self.param_space)
 
             # Reduce the sampled responses of each design point to the values the optimizer sees
             n_f, n_g = self.n_obj, self.n_ieq_constr
-            for f_i, output in enumerate(results.outputs[:n_f]):
-                f_out[x_i, f_i] = output.reduce(self.obj_scalar[f_i])
-            for g_i, output in enumerate(results.outputs[n_f:n_f+n_g]):
-                g_out[x_i, g_i] = output.reduce(self.ieq_constr_scalar[g_i])
-            for h_i, output in enumerate(results.outputs[n_f+n_g:]):
-                h_out[x_i, h_i] = output.reduce(self.eq_constr_scalar[h_i])
+            for f_i, output in enumerate(outputs[:n_f]):
+                f_stoch_out[x_i, f_i] = output
+                obj_scalar = self.obj_scalar[f_i]
+                f_out[x_i, f_i] = obj_scalar.scalarize(output) if not isinstance(output, float) else output
+            for g_i, output in enumerate(outputs[n_f:n_f+n_g]):
+                g_stoch_out[x_i, g_i] = output
+                ieq_constr_scalar = self.ieq_constr_scalar[g_i]
+                g_out[x_i, g_i] = ieq_constr_scalar.scalarize(output) if not isinstance(output, float) else output
+            for h_i, output in enumerate(outputs[n_f+n_g:]):
+                h_stoch_out[x_i, h_i] = output
+                eq_constr_scalar = self.eq_constr_scalar[h_i]
+                h_out[x_i, h_i] = eq_constr_scalar.scalarize(output) if not isinstance(output, float) else output
 
     def _arch_evaluate_sample(self, x: np.ndarray, is_active: np.ndarray, f_out: np.ndarray, g_out: np.ndarray,
                               h_out: np.ndarray, parameters: np.ndarray, *args, **kwargs):
