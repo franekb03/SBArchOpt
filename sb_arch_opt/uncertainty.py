@@ -22,10 +22,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+import numpy as np
 from typing import List, Optional, Union
 
-import openturns as ot
-import numpy as np
+try:
+    import openturns as ot
+except ImportError:
+    raise ImportError('Looks like SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]')
+
 
 __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
            'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput']

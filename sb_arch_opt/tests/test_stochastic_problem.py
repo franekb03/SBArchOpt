@@ -1,16 +1,19 @@
 import pytest
 import numpy as np
-from sb_arch_opt.tests.conftest import (HAS_UNCERTAINTY, VectorizedProblem, HierarchicalProblem,
-                                        DeterministicResponseProblem, make_space)
 
-pytestmark = pytest.mark.skipif(not HAS_UNCERTAINTY, reason='OpenTURNS dependency not installed: '
-                                                            'pip install sb-arch-opt[uncertainty]')
-
-if HAS_UNCERTAINTY:
+try:
     import openturns as ot
     from sb_arch_opt.uncertainty import *
     from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
-    from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenbrock
+    from sb_arch_opt.problems.stochastic_problems.rosenbrock import StochasticRosenbrock
+    from sb_arch_opt.tests.conftest import (VectorizedProblem, HierarchicalProblem,
+                                            DeterministicResponseProblem, make_space)
+
+except ImportError:
+    pytest.skip(
+        "SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]",
+        allow_module_level=True,
+    )
 
 
 def _output(values):
