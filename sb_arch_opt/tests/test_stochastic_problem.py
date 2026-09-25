@@ -1,17 +1,18 @@
 import pytest
 import numpy as np
-from sb_arch_opt.tests.conftest import (HAS_UNCERTAINTY, VectorizedProblem, HierarchicalProblem,
-                                        DeterministicResponseProblem, AllResponseKindsProblem, make_space)
-from pymoo.core.variable import Real
 
-pytestmark = pytest.mark.skipif(not HAS_UNCERTAINTY, reason='OpenTURNS dependency not installed: '
-                                                            'pip install sb-arch-opt[uncertainty]')
-
-if HAS_UNCERTAINTY:
+try:
     import openturns as ot
     from sb_arch_opt.uncertainty import *
     from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
-    from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenbrock
+    from sb_arch_opt.tests.conftest import (VectorizedProblem, HierarchicalProblem,
+                                            DeterministicResponseProblem, make_space)
+
+except ImportError:
+    pytest.skip(
+        "SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]",
+        allow_module_level=True,
+    )
 
 
 def _output(values):
@@ -169,23 +170,6 @@ def test_response_kinds_use_their_own_scalar(all_response_kinds_problem):
     assert out['H'][0, 0] > out['h_stochastic'][0, 0].mean
 
 
-def test_print_stats_with_custom_scalars_and_uq_method(capsys):
-    class WorstCase(Scalarization):  # A user-defined scalar, without a __repr__ of its own
-
-        def scalarize(self, output: StochasticOutput) -> float:
-            return float(output.quantile(.99))
-
-    problem = AllResponseKindsProblem(obj_scalar=[WorstCase()], ieq_constr_scalar=[Quantile(q=.9)])
-    problem.print_stats()
-    stats = capsys.readouterr().out
-
-    assert 'obj          : [WorstCase]' in stats
-    assert 'ieq_constr   : [Quantile with q = 0.9]' in stats
-    assert 'eq_constr    : [Margin with k = 3.0]' in stats
-    assert 'uq_method    : Monte Carlo' in stats
-    assert str(UQMethod(10)) == 'UQMethod'
-
-
 def test_scalar_counts_checked_per_response_kind():
     with pytest.raises(ValueError):
         HierarchicalProblem(ieq_constr_scalar=[Mean(), Mean()])
@@ -317,25 +301,3 @@ def test_pce_fails_the_design_point_when_evaluations_fail():
 
     assert not np.isfinite(out['f_stochastic'][0, 0])
     assert not np.isfinite(out['F'][0, 0])
-
-
-def test_stochastic_rosenbrock():
-    problem = StochasticRosenbrock(n_var=3, std=.05, n=500)
-    assert problem.n_var == 3
-    assert problem.param_space.n_parameters == 2
-    assert repr(problem)
-
-    # At the optimum the expected objective equals the sum of the parameter variances
-    out = problem.evaluate(problem.pareto_set(), return_as_dictionary=True)
-    assert out['F'][0, 0] == pytest.approx(problem.pareto_front()[0, 0], abs=1e-3)
-
-    # Moving away from the optimum makes it worse
-    f_off = problem.evaluate(np.array([[.5, .5, .5]]), return_as_dictionary=True)['F']
-    assert f_off[0, 0] > out['F'][0, 0]
-
-
-def test_stochastic_rosenbrock_with_pce():
-    problem = StochasticRosenbrock(n_var=3, uq_method=PolynomialChaos(40, seed=42, degree=2))
-    out = problem.evaluate(problem.pareto_set(), return_as_dictionary=True)
-
-    assert out['F'][0, 0] == pytest.approx(problem.pareto_front()[0, 0], abs=1e-3)

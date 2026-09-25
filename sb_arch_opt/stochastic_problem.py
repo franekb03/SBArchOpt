@@ -22,16 +22,25 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from typing import Union, List, Optional
-
 import numpy as np
+from typing import Union, List, Optional
 from pymoo.core.variable import Variable
-
 from sb_arch_opt.design_space import ArchDesignSpace
 from sb_arch_opt.problem import ArchOptProblemBase
-from sb_arch_opt.uncertainty import *
 
-__all__ = ['StochasticArchOptProblem']
+try:
+    from sb_arch_opt.uncertainty import StochasticParameterSpace, UQMethod, Scalarization, Mean
+    HAS_UNCERTAINTY = True
+
+except ImportError:
+    HAS_UNCERTAINTY = False
+
+__all__ = ['StochasticArchOptProblem', 'HAS_UNCERTAINTY', 'check_dependency']
+
+
+def check_dependency():
+    if not HAS_UNCERTAINTY:
+        raise ImportError('Looks like SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]')
 
 
 class StochasticArchOptProblem(ArchOptProblemBase):
@@ -86,6 +95,7 @@ class StochasticArchOptProblem(ArchOptProblemBase):
                  eq_constr_scalar: Optional[List[Scalarization]] = None,
                  **kwargs):
 
+        check_dependency()
         self.obj_scalar = self.check_scalars(obj_scalar, n_obj)
         self.ieq_constr_scalar = self.check_scalars(ieq_constr_scalar, n_ieq_constr)
         self.eq_constr_scalar = self.check_scalars(eq_constr_scalar, n_eq_constr)
@@ -119,13 +129,13 @@ class StochasticArchOptProblem(ArchOptProblemBase):
         return list(scalars)
 
     def _print_extra_stats(self):
-        print(f'stochastic   : True')
-        print(f'n_params     : {self.param_space.n_parameters}')
-        print(f'uq_method    : {self.uq_method}')
-        print(f'n_evaluations: {self.uq_method.n_evaluations}')
-        print(f'obj          : {self.obj_scalar}')
-        print(f'ieq_constr   : {self.ieq_constr_scalar}')
-        print(f'eq_constr    : {self.eq_constr_scalar}')
+        print(f'stochastic           : True')
+        print(f'n_stochastic_params  : {self.param_space.n_parameters}')
+        print(f'uq_method            : {self.uq_method}')
+        print(f'n_uq_samples         : {self.uq_method.n_evaluations}')
+        print(f'obj_scalarize        : {self.obj_scalar}')
+        print(f'ieq_constr_scalarize : {self.ieq_constr_scalar}')
+        print(f'eq_constr_scalarize  : {self.eq_constr_scalar}')
 
 
     def _evaluate(self, x, out, *args, **kwargs):

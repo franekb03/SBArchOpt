@@ -22,16 +22,29 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+import copy
+
+import numpy as np
 from typing import List, Optional, Union
 
-import openturns as ot
-import numpy as np
+try:
+    import openturns as ot
+    HAS_UNCERTAINTY = True
+except ImportError:
+    HAS_UNCERTAINTY = False
+
+
+def check_dependency():
+    if not HAS_UNCERTAINTY:
+        raise ImportError(
+            'Looks like SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]')
+
 
 __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
-           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput']
+           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput', 'HAS_UNCERTAINTY', 'check_dependency']
 
 EvaluationOutput = Union['StochasticOutput', float]
-
+"""Output either distribution or numeric value."""
 
 class StochasticParameter:
     """
@@ -46,6 +59,7 @@ class StochasticParameter:
      """
 
     def __init__(self, name, dist: ot.DistributionImplementation, ref=None):
+        check_dependency()
         self.name = name
         self.dist = dist
         self.ref = ref
@@ -72,6 +86,7 @@ class StochasticParameterSpace:
      """
 
     def __init__(self, parameters: List[StochasticParameter]):
+        check_dependency()
         self._parameters = parameters
 
     @property
@@ -94,9 +109,12 @@ class StochasticParameterSpace:
         """
         Return `i_realization` of `samples` (n_samples x n_parameters) as a list of stochastic parameters.
         """
+        realization = []
         for j, param in enumerate(self._parameters):
-            param.sample = samples[i_realization, j]
-        return self._parameters
+            realized = copy.copy(param)
+            realized.sample = float(samples[i_realization, j])
+            realization.append(realized)
+        return realization
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
         """Draw n samples of the stochastic parameters; returns an n x n_parameters matrix"""
@@ -118,11 +136,12 @@ class StochasticOutput:
     """
 
     def __init__(self, dist: ot.Distribution, method_results=None):
+        check_dependency()
         self.dist = dist
         self.method_results = method_results
 
     @staticmethod
-    def build_distribution(output_samples: ot.Sample) -> ot.Distribution | float:
+    def build_distribution(output_samples: ot.Sample) -> Union[ot.Distribution | float]:
         values = np.asarray(output_samples, dtype=float).ravel()
 
         if values.size == 0 or not np.all(np.isfinite(values)):
@@ -161,8 +180,11 @@ class StochasticOutput:
     def margin(self, k: float = 1.645, direction: int =-1) -> float:
         return self.mean - np.sign(direction) * k * self.std
 
-    def __str__(self):
+    def __repr__(self):
         return f"(mean = {self.mean:.4g}, sigma = {self.std:.4g})"
+
+    def __str__(self):
+        return repr(self)
 
 
 class Scalarization:
@@ -173,6 +195,10 @@ class Scalarization:
     - Margin
     - Quantile
     """
+
+    def __init__(self):
+        check_dependency()
+
     def scalarize(self, output: StochasticOutput) -> float:
         """Reduce an (n_samples x 1) sample of one response to a single value that the optimizer sees based on the optimization problem type."""
         raise NotImplementedError
@@ -190,12 +216,6 @@ class Mean(Scalarization):
     def scalarize(self, output: StochasticOutput) -> float:
         return float(output.mean)
 
-    def __repr__(self):
-        return "Mean"
-
-    def __str__(self):
-        return "Mean"
-
 
 class Margin(Scalarization):
     """
@@ -210,6 +230,7 @@ class Margin(Scalarization):
     """
 
     def __init__(self, k: float = 1.645, direction: int =-1):
+        super().__init__()
         self.k = k
         self.direction = direction
 
@@ -217,9 +238,6 @@ class Margin(Scalarization):
         return float(output.margin(self.k, self.direction))
 
     def __repr__(self):
-        return f"Margin with k = {self.k}"
-
-    def __str__(self):
         return f"Margin with k = {self.k}"
 
 
@@ -235,6 +253,7 @@ class Quantile(Scalarization):
     """
 
     def __init__(self, q: float = 0.95):
+        super().__init__()
         if not 0. <= q <= 1.:
             raise ValueError(f'Quantile should be between 0 and 1: {q}')
         self.q = q
@@ -243,9 +262,6 @@ class Quantile(Scalarization):
         return float(output.quantile(self.q))
 
     def __repr__(self):
-        return f"Quantile with q = {self.q}"
-
-    def __str__(self):
         return f"Quantile with q = {self.q}"
 
 
@@ -263,6 +279,7 @@ class UQMethod:
     """
 
     def __init__(self, n_evaluations: int, seed: int = None):
+        check_dependency()
         if n_evaluations is None or n_evaluations <= 0:
             raise ValueError('n_evaluations must be specified: it is the number of expensive evaluations '
                              'per design point')
@@ -283,6 +300,7 @@ class UQMethod:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
             samples = self._draw_samples(param_space)
+            self._samples = samples
         return samples
 
     def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
@@ -300,8 +318,11 @@ class UQMethod:
         """
         raise NotImplementedError
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return self.__class__.__name__
+
+    def __str__(self):
+        return repr(self)
 
 
 class MonteCarlo(UQMethod):
@@ -324,7 +345,7 @@ class MonteCarlo(UQMethod):
         outputs = [StochasticOutput.from_output_samples(sample[:, i]) for i in range(results.shape[1])]
         return outputs
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return 'Monte Carlo'
 
 
@@ -411,5 +432,5 @@ class PolynomialChaos(UQMethod):
             outputs.append(StochasticOutput.from_output_samples(samples, chaos_result))
         return outputs
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return 'Polynomial Chaos Expansion'
