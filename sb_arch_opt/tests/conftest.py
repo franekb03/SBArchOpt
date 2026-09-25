@@ -10,15 +10,19 @@ from pymoo.problems.multi.zdt import ZDT1
 try:
     import openturns as ot
     from sb_arch_opt.uncertainty import *
-    from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
-
+    from sb_arch_opt.stochastic_problem import *
     HAS_UNCERTAINTY = True
-
 except ImportError:
     HAS_UNCERTAINTY = False
 
     class StochasticArchOptProblem:
         pass
+
+
+def check_dependency():
+    if not HAS_UNCERTAINTY:
+        raise ImportError(
+            'Looks like SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]')
 
 
 class DummyProblem(ArchOptTestProblemBase):
@@ -121,6 +125,7 @@ class VectorizedProblem(StochasticArchOptProblem):
     """f = (u - x0)^2 + x1^2, evaluated for all design points at once"""
 
     def __init__(self, n=100, seed=42, uq_method=None, fail=False, **kwargs):
+        check_dependency()
         self.fail = fail
         self.seen_parameters = []
         super().__init__([Real(bounds=(-2., 2.)), Real(bounds=(-2., 2.))],
@@ -145,6 +150,7 @@ class HierarchicalProblem(StochasticArchOptProblem):
     """Implicit (hierarchical) design space, a constraint, and the per-row evaluation pattern"""
 
     def __init__(self, n=50, seed=1, **kwargs):
+        check_dependency()
         super().__init__([Choice(options=['electric', 'hybrid']), Real(bounds=(.2, 1.)), Real(bounds=(.1, .4))],
                          param_space=StochasticParameterSpace([
                              StochasticParameter('payload', ot.Normal(2., .3)),
@@ -171,6 +177,7 @@ class AllResponseKindsProblem(StochasticArchOptProblem):
     """One objective, one inequality and one equality constraint, each with its own scalar"""
 
     def __init__(self, **kwargs):
+        check_dependency()
         kwargs.setdefault('obj_scalar', [Mean()])
         kwargs.setdefault('ieq_constr_scalar', [Mean()])
         kwargs.setdefault('eq_constr_scalar', [Margin(k=3.)])

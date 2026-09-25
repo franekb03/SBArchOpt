@@ -22,13 +22,28 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+from __future__ import annotations
+
+import copy
+
+import numpy as np
 from typing import List, Optional, Union
 
-import openturns as ot
-import numpy as np
+try:
+    import openturns as ot
+    HAS_UNCERTAINTY = True
+except ImportError:
+    HAS_UNCERTAINTY = False
+
+
+def check_dependency():
+    if not HAS_UNCERTAINTY:
+        raise ImportError(
+            'Looks like SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]')
+
 
 __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
-           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput']
+           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput', 'HAS_UNCERTAINTY', 'check_dependency']
 
 EvaluationOutput = Union['StochasticOutput', float]
 """Output either distribution or numeric value."""
@@ -46,6 +61,7 @@ class StochasticParameter:
      """
 
     def __init__(self, name, dist: ot.DistributionImplementation, ref=None):
+        check_dependency()
         self.name = name
         self.dist = dist
         self.ref = ref
@@ -72,12 +88,18 @@ class StochasticParameterSpace:
      """
 
     def __init__(self, parameters: List[StochasticParameter]):
+        check_dependency()
         self._parameters = parameters
 
     @property
     def n_parameters(self) -> int:
         """Number of stochastic parameters"""
         return len(self._parameters)
+
+    @property
+    def parameters(self) -> List[StochasticParameter]:
+        """The stochastic parameters, in the order of the sample columns"""
+        return list(self._parameters)
 
     @property
     def parameter_names(self) -> List[str]:
@@ -94,9 +116,12 @@ class StochasticParameterSpace:
         """
         Return `i_realization` of `samples` (n_samples x n_parameters) as a list of stochastic parameters.
         """
+        realization = []
         for j, param in enumerate(self._parameters):
-            param.sample = samples[i_realization, j]
-        return self._parameters
+            realized = copy.copy(param)
+            realized.sample = float(samples[i_realization, j])
+            realization.append(realized)
+        return realization
 
     def get_random_samples(self, n_samples: int) -> np.ndarray:
         """Draw n samples of the stochastic parameters; returns an n x n_parameters matrix"""
@@ -118,11 +143,12 @@ class StochasticOutput:
     """
 
     def __init__(self, dist: ot.Distribution, method_results=None):
+        check_dependency()
         self.dist = dist
         self.method_results = method_results
 
     @staticmethod
-    def build_distribution(output_samples: ot.Sample) -> ot.Distribution | float:
+    def build_distribution(output_samples: ot.Sample) -> Union[ot.Distribution, float]:
         values = np.asarray(output_samples, dtype=float).ravel()
 
         if values.size == 0 or not np.all(np.isfinite(values)):
@@ -176,6 +202,10 @@ class Scalarization:
     - Margin
     - Quantile
     """
+
+    def __init__(self):
+        check_dependency()
+
     def scalarize(self, output: StochasticOutput) -> float:
         """Reduce an (n_samples x 1) sample of one response to a single value that the optimizer sees based on the optimization problem type."""
         raise NotImplementedError
@@ -207,6 +237,7 @@ class Margin(Scalarization):
     """
 
     def __init__(self, k: float = 1.645, direction: int =-1):
+        super().__init__()
         self.k = k
         self.direction = direction
 
@@ -229,6 +260,7 @@ class Quantile(Scalarization):
     """
 
     def __init__(self, q: float = 0.95):
+        super().__init__()
         if not 0. <= q <= 1.:
             raise ValueError(f'Quantile should be between 0 and 1: {q}')
         self.q = q
@@ -254,6 +286,7 @@ class UQMethod:
     """
 
     def __init__(self, n_evaluations: int, seed: int = None):
+        check_dependency()
         if n_evaluations is None or n_evaluations <= 0:
             raise ValueError('n_evaluations must be specified: it is the number of expensive evaluations '
                              'per design point')
@@ -261,20 +294,22 @@ class UQMethod:
         self.seed = seed
 
         self._samples: Optional[np.ndarray] = None
+        self._samples_space: Optional[StochasticParameterSpace] = None
 
     def get_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
         """
-        Get samples from the joint distribution provided by the param_space.
+        Get samples from the joint distribution provided by the param_space. The samples are drawn once and reused
+        for every design point (common random numbers), until `resample` is called or another space is given.
         """
         if param_space is None:
             raise ValueError('No parameter space to sample')
 
-        samples = self._samples
-        if samples is None:
+        if self._samples is None or self._samples_space is not param_space:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
-            samples = self._draw_samples(param_space)
-        return samples
+            self._samples = self._draw_samples(param_space)
+            self._samples_space = param_space
+        return self._samples
 
     def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
         """Draw the design of experiments in the parameter space; override to use a different design"""
@@ -357,12 +392,12 @@ class PolynomialChaos(UQMethod):
         """Draw samples with LHS method"""
         self._validate(param_space)
         samples = param_space.get_lhs_samples(self.n_evaluations)
+        self._metamodel_input = param_space.joint_dist.getSample(self.n_metamodel_samples)
         return samples
 
     def _get_metamodel_input(self, param_space: StochasticParameterSpace) -> ot.Sample:
         """Get samples used for evaluating the surrogate model"""
-        if self._metamodel_input is None:
-            self._metamodel_input = param_space.joint_dist.getSample(self.n_metamodel_samples)
+        self.get_samples(param_space)
         return self._metamodel_input
 
     def _build_algorithm(self, param_space: StochasticParameterSpace, input_sample: ot.Sample, output_sample: ot.Sample) -> ot.FunctionalChaosAlgorithm:

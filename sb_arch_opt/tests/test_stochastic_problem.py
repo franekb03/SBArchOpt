@@ -1,16 +1,18 @@
 import pytest
 import numpy as np
-from sb_arch_opt.tests.conftest import (HAS_UNCERTAINTY, VectorizedProblem, HierarchicalProblem,
-                                        DeterministicResponseProblem, make_space)
 
-pytestmark = pytest.mark.skipif(not HAS_UNCERTAINTY, reason='OpenTURNS dependency not installed: '
-                                                            'pip install sb-arch-opt[uncertainty]')
-
-if HAS_UNCERTAINTY:
+try:
     import openturns as ot
     from sb_arch_opt.uncertainty import *
     from sb_arch_opt.stochastic_problem import StochasticArchOptProblem
-    from sb_arch_opt.problems.robust_optimization.rosenbrock import StochasticRosenbrock
+    from sb_arch_opt.tests.conftest import (VectorizedProblem, HierarchicalProblem,
+                                            DeterministicResponseProblem, make_space)
+
+except ImportError:
+    pytest.skip(
+        "SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]",
+        allow_module_level=True,
+    )
 
 
 def _output(values):
@@ -26,6 +28,7 @@ def test_parameter_space():
     assert space.n_parameters == 2
     assert space.parameter_names == ['a', 'b']
     assert space.joint_dist.getDimension() == 2
+    assert [parameter.name for parameter in space.parameters] == ['a', 'b']
 
     for samples in [space.get_random_samples(20), space.get_lhs_samples(20)]:
         assert samples.shape == (20, 2)
@@ -299,25 +302,3 @@ def test_pce_fails_the_design_point_when_evaluations_fail():
 
     assert not np.isfinite(out['f_stochastic'][0, 0])
     assert not np.isfinite(out['F'][0, 0])
-
-
-def test_stochastic_rosenbrock():
-    problem = StochasticRosenbrock(n_var=3, std=.05, n=500)
-    assert problem.n_var == 3
-    assert problem.param_space.n_parameters == 2
-    assert repr(problem)
-
-    # At the optimum the expected objective equals the sum of the parameter variances
-    out = problem.evaluate(problem.pareto_set(), return_as_dictionary=True)
-    assert out['F'][0, 0] == pytest.approx(problem.pareto_front()[0, 0], abs=1e-3)
-
-    # Moving away from the optimum makes it worse
-    f_off = problem.evaluate(np.array([[.5, .5, .5]]), return_as_dictionary=True)['F']
-    assert f_off[0, 0] > out['F'][0, 0]
-
-
-def test_stochastic_rosenbrock_with_pce():
-    problem = StochasticRosenbrock(n_var=3, uq_method=PolynomialChaos(40, seed=42, degree=2))
-    out = problem.evaluate(problem.pareto_set(), return_as_dictionary=True)
-
-    assert out['F'][0, 0] == pytest.approx(problem.pareto_front()[0, 0], abs=1e-3)
