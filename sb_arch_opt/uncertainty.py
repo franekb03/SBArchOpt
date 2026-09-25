@@ -97,6 +97,11 @@ class StochasticParameterSpace:
         return len(self._parameters)
 
     @property
+    def parameters(self) -> List[StochasticParameter]:
+        """The stochastic parameters, in the order of the sample columns"""
+        return list(self._parameters)
+
+    @property
     def parameter_names(self) -> List[str]:
         """List of stochastic parameter names"""
         return [parameter.name for parameter in self._parameters]

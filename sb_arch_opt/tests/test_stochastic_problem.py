@@ -27,6 +27,7 @@ def test_parameter_space():
 
     assert space.n_parameters == 2
     assert space.parameter_names == ['a', 'b']
+    assert [parameter.name for parameter in space.parameters] == ['a', 'b']
     assert space.joint_dist.getDimension() == 2
 
     for samples in [space.get_random_samples(20), space.get_lhs_samples(20)]:
