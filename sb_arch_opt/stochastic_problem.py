@@ -27,7 +27,6 @@ from typing import Union, List, Optional
 from pymoo.core.variable import Variable
 from sb_arch_opt.design_space import ArchDesignSpace
 from sb_arch_opt.problem import ArchOptProblemBase
-from sb_arch_opt.tests.conftest import HAS_UNCERTAINTY
 
 try:
     from sb_arch_opt.uncertainty import StochasticParameterSpace, UQMethod, Scalarization, Mean

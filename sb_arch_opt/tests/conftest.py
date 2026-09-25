@@ -28,7 +28,6 @@ def check_dependency():
 class DummyProblem(ArchOptTestProblemBase):
 
     def __init__(self, only_discrete=False, fail=False):
-        check_dependency()
         self._problem = problem = ZDT1(n_var=2 if only_discrete else 5)
         if only_discrete:
             des_vars = [Choice(options=[str(9-j) for j in range(10)]) if i == 0 else Integer(bounds=(1, 10))
