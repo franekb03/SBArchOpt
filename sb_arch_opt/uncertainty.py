@@ -95,6 +95,11 @@ class StochasticParameterSpace:
         return len(self._parameters)
 
     @property
+    def parameters(self) -> List[StochasticParameter]:
+        """The stochastic parameters, in the order of the sample columns"""
+        return list(self._parameters)
+
+    @property
     def parameter_names(self) -> List[str]:
         """List of stochastic parameter names"""
         return [parameter.name for parameter in self._parameters]
@@ -141,7 +146,7 @@ class StochasticOutput:
         self.method_results = method_results
 
     @staticmethod
-    def build_distribution(output_samples: ot.Sample) -> Union[ot.Distribution | float]:
+    def build_distribution(output_samples: ot.Sample) -> Union[ot.Distribution, float]:
         values = np.asarray(output_samples, dtype=float).ravel()
 
         if values.size == 0 or not np.all(np.isfinite(values)):
@@ -287,21 +292,19 @@ class UQMethod:
         self.seed = seed
 
         self._samples: Optional[np.ndarray] = None
+        self._samples_space: Optional[StochasticParameterSpace] = None
 
     def get_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
         """
-        Get samples from the joint distribution provided by the param_space.
+        Get samples from the joint distribution provided by the param_space. The samples are drawn once and reused
+        for every design point (common random numbers), until `resample` is called or another space is given.
         """
-        if param_space is None:
-            raise ValueError('No parameter space to sample')
-
-        samples = self._samples
-        if samples is None:
+        if self._samples is None or self._samples_space is not param_space:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
-            samples = self._draw_samples(param_space)
-            self._samples = samples
-        return samples
+            self._samples = self._draw_samples(param_space)
+            self._samples_space = param_space
+        return self._samples
 
     def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
         """Draw the design of experiments in the parameter space; override to use a different design"""
@@ -384,12 +387,12 @@ class PolynomialChaos(UQMethod):
         """Draw samples with LHS method"""
         self._validate(param_space)
         samples = param_space.get_lhs_samples(self.n_evaluations)
+        self._metamodel_input = param_space.joint_dist.getSample(self.n_metamodel_samples)
         return samples
 
     def _get_metamodel_input(self, param_space: StochasticParameterSpace) -> ot.Sample:
         """Get samples used for evaluating the surrogate model"""
-        if self._metamodel_input is None:
-            self._metamodel_input = param_space.joint_dist.getSample(self.n_metamodel_samples)
+        self.get_samples(param_space)
         return self._metamodel_input
 
     def _build_algorithm(self, param_space: StochasticParameterSpace, input_sample: ot.Sample, output_sample: ot.Sample) -> ot.FunctionalChaosAlgorithm:
