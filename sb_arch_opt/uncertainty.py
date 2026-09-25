@@ -299,6 +299,9 @@ class UQMethod:
         Get samples from the joint distribution provided by the param_space. The samples are drawn once and reused
         for every design point (common random numbers), until `resample` is called or another space is given.
         """
+        if param_space is None:
+            raise ValueError('No parameter space to sample')
+
         if self._samples is None or self._samples_space is not param_space:
             if self.seed is not None:
                 ot.RandomGenerator.SetSeed(self.seed)
