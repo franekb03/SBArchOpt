@@ -28,19 +28,10 @@ from pymoo.core.variable import Variable
 from sb_arch_opt.design_space import ArchDesignSpace
 from sb_arch_opt.problem import ArchOptProblemBase
 
-try:
-    from sb_arch_opt.uncertainty import StochasticParameterSpace, UQMethod, Scalarization, Mean
-    HAS_UNCERTAINTY = True
-
-except ImportError:
-    HAS_UNCERTAINTY = False
+from sb_arch_opt.uncertainty import StochasticParameterSpace, UQMethod, Scalarization, Mean, \
+    HAS_UNCERTAINTY, check_dependency
 
 __all__ = ['StochasticArchOptProblem', 'HAS_UNCERTAINTY', 'check_dependency']
-
-
-def check_dependency():
-    if not HAS_UNCERTAINTY:
-        raise ImportError('Looks like SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]')
 
 
 class StochasticArchOptProblem(ArchOptProblemBase):

@@ -7,22 +7,11 @@ from sb_arch_opt.problems.problems_base import *
 from pymoo.core.variable import Real, Integer, Choice
 from pymoo.problems.multi.zdt import ZDT1
 
-try:
+from sb_arch_opt.uncertainty import *
+from sb_arch_opt.stochastic_problem import *
+
+if HAS_UNCERTAINTY:
     import openturns as ot
-    from sb_arch_opt.uncertainty import *
-    from sb_arch_opt.stochastic_problem import *
-    HAS_UNCERTAINTY = True
-except ImportError:
-    HAS_UNCERTAINTY = False
-
-    class StochasticArchOptProblem:
-        pass
-
-
-def check_dependency():
-    if not HAS_UNCERTAINTY:
-        raise ImportError(
-            'Looks like SBArchOpt uncertainty package is not installed! Run: pip install sb-arch-opt[uncertainty]')
 
 
 class DummyProblem(ArchOptTestProblemBase):

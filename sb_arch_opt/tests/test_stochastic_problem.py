@@ -82,6 +82,28 @@ def test_uq_method_samples(method_name):
         method.get_samples(None)
 
 
+def test_samples_follow_the_parameter_space():
+    method = MonteCarlo(n_evaluations=5, seed=42)
+    one_param = make_space(ot.Normal(0., 1.))
+    two_params = make_space(ot.Normal(0., 1.), ot.Uniform(2., 4.))
+
+    assert method.get_samples(one_param).shape == (5, 1)
+    # Samples of one space are never handed out for another one
+    assert method.get_samples(two_params).shape == (5, 2)
+
+
+def test_pce_metamodel_input_is_seeded_with_the_design():
+    space = make_space(ot.Normal(0., 1.))
+    a, b = PolynomialChaos(20, seed=42), PolynomialChaos(20, seed=42)
+
+    a.get_samples(space)
+    ot.RandomGenerator.SetSeed(7)  # e.g. another method drawing in between, or a different worker process
+    b.get_samples(space)
+    ot.RandomGenerator.SetSeed(8)
+
+    assert np.array_equal(np.array(a._get_metamodel_input(space)), np.array(b._get_metamodel_input(space)))
+
+
 def test_parameter_realization():
     space = StochasticParameterSpace([
         StochasticParameter('a', ot.Normal(0., 1.)),
