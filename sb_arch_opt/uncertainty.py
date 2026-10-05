@@ -142,9 +142,10 @@ class StochasticOutput:
     :param dist: the output distribution for the specific objective or constraint.
     """
 
-    def __init__(self, dist: ot.Distribution, method_results=None):
+    def __init__(self, dist: ot.Distribution, samples: np.ndarray, method_results=None):
         check_dependency()
         self.dist = dist
+        self.samples = samples
         self.method_results = method_results
 
     @staticmethod
@@ -168,10 +169,11 @@ class StochasticOutput:
         a float value is returned to represent deterministic output. If any
         sample is nan, np.nan is returned.
         """
+        values = np.asarray(output_samples, dtype=float).ravel()
         dist = cls.build_distribution(output_samples)
         if isinstance(dist, float):
             return dist
-        return cls(dist=dist, method_results=method_results)
+        return cls(dist=dist, samples=values, method_results=method_results)
 
     @property
     def mean(self) -> float:
