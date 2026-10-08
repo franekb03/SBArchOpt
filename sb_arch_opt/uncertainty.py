@@ -261,14 +261,16 @@ class Quantile(Scalarization):
 
     """
 
-    def __init__(self, q: float = 0.95):
+    def __init__(self, q: float = 0.95, direction: int =-1):
         super().__init__()
         if not 0. <= q <= 1.:
             raise ValueError(f'Quantile should be between 0 and 1: {q}')
         self.q = q
+        self.direction = direction
 
     def scalarize(self, output: StochasticOutput) -> float:
-        return float(output.quantile(self.q))
+        q = self.q if self.direction == -1 else 1 - self.q
+        return float(output.quantile(q))
 
     def __repr__(self):
         return f"Quantile with q = {self.q}"
