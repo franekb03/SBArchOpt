@@ -27,7 +27,7 @@ from __future__ import annotations
 import copy
 
 import numpy as np
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Any
 
 try:
     import openturns as ot
@@ -43,7 +43,7 @@ def check_dependency():
 
 
 __all__ = ['Scalarization', 'Mean', 'Margin', 'Quantile', 'StochasticParameter', 'StochasticParameterSpace',
-           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput', 'HAS_UNCERTAINTY', 'check_dependency']
+           'StochasticOutput', 'UQMethod', 'MonteCarlo', 'PolynomialChaos', 'EvaluationOutput', 'AdaptivePolynomialChaos', 'HAS_UNCERTAINTY', 'check_dependency']
 
 EvaluationOutput = Union['StochasticOutput', float]
 """Output either distribution or numeric value."""
@@ -91,6 +91,14 @@ class StochasticParameterSpace:
         check_dependency()
         self._parameters = parameters
 
+    @classmethod
+    def from_joint_dist(cls, joint_dist: ot.JointDistribution):
+        parameters = []
+        for i in range(joint_dist.getDimension()):
+            dist = joint_dist.getMarginal(i)
+            parameters.append(StochasticParameter(dist.getName(), dist.getImplementation()))
+        return cls(parameters)
+
     @property
     def n_parameters(self) -> int:
         """Number of stochastic parameters"""
@@ -132,6 +140,12 @@ class StochasticParameterSpace:
         """Draw n samples of the stochastic parameters; returns an n x n_parameters matrix built with LHS"""
         lhs = ot.LHSExperiment(self.joint_dist, n_samples)
         result = lhs.generate()
+        return np.array(result)
+
+    def get_samples_from_qmc(self, sequence: ot.LowDiscrepancySequenceImplementation, n_samples) -> np.ndarray:
+        exp = ot.LowDiscrepancyExperiment(sequence, self.joint_dist, n_samples, True)
+        exp.setRandomize(True)
+        result = exp.generate()
         return np.array(result)
 
 
@@ -289,41 +303,43 @@ class UQMethod:
     :param seed: optional seed the OpenTURNS generator before drawing, so the design is reproducible
     """
 
-    def __init__(self, n_evaluations: int, seed: int = None):
+    def __init__(self, n_evaluations: Optional[int] = None, seed: int = 42):
         check_dependency()
-        if n_evaluations is None or n_evaluations <= 0:
+        if n_evaluations is not None and n_evaluations <= 0:
             raise ValueError('n_evaluations must be specified: it is the number of expensive evaluations '
                              'per design point')
         self.n_evaluations = n_evaluations
         self.seed = seed
 
-        self._samples: Optional[np.ndarray] = None
-        self._samples_space: Optional[StochasticParameterSpace] = None
+    @property
+    def adaptive_uq_method(self) -> bool:
+        return False
 
-    def get_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
+    def get_samples(self, param_space: StochasticParameterSpace, n_evaluations: Optional[int] = None) -> np.ndarray:
         """
-        Get samples from the joint distribution provided by the param_space. The samples are drawn once and reused
-        for every design point (common random numbers), until `resample` is called or another space is given.
+        Get samples from the joint distribution provided by the param_space. Every draw reseeds the generator to
+        `self.seed`, so the same realizations are reproduced across calls (common random numbers); set `seed=None`
+        to draw different ones.
         """
-        if param_space is None:
-            raise ValueError('No parameter space to sample')
+        if n_evaluations is None:
+            n_evaluations = self.n_evaluations
+        if n_evaluations is None:
+            raise ValueError('n_evaluations must be specified')
+        if n_evaluations <= 0:
+            raise ValueError('n_evaluations must be positive')
 
-        if self._samples is None or self._samples_space is not param_space:
-            if self.seed is not None:
-                ot.RandomGenerator.SetSeed(self.seed)
-            self._samples = self._draw_samples(param_space)
-            self._samples_space = param_space
-        return self._samples
+        # Reseed before every draw so the same realizations are reproduced across calls (common random numbers);
+        # leave the generator alone when seed is None so repeated calls draw new samples.
+        if self.seed is not None:
+            ot.RandomGenerator.SetSeed(self.seed)
+        return self._draw_samples(param_space, n_evaluations)
 
-    def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
+    @staticmethod
+    def _draw_samples(param_space: StochasticParameterSpace, n_evaluations: int) -> np.ndarray:
         """Draw the design of experiments in the parameter space; override to use a different design"""
-        return param_space.get_random_samples(self.n_evaluations)
+        return param_space.get_lhs_samples(n_evaluations)
 
-    def resample(self):
-        """Draw a new design on the next evaluation"""
-        self._samples = None
-
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> list[EvaluationOutput]:
+    def process_results(self, results, *args, **kwargs) -> list[EvaluationOutput]:
         """
         Turn the responses of one design point (an n_samples x (n_obj+n_ieq_constr+n_eq_constr) matrix) into the
         list of EvaluationOutput objects.
@@ -342,15 +358,12 @@ class MonteCarlo(UQMethod):
     Monte Carlo uncertainty propagation
     """
 
-    def __init__(self, n_evaluations: int = 100, seed: int = 42):
-        super().__init__(n_evaluations, seed)
-
-    def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
+    @staticmethod
+    def _draw_samples(param_space: StochasticParameterSpace, n_evaluations: int) -> np.ndarray:
         """Draw samples with LHS method"""
-        samples = param_space.get_lhs_samples(self.n_evaluations)
-        return samples
+        return param_space.get_lhs_samples(n_evaluations)
 
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace = None) -> list[EvaluationOutput]:
+    def process_results(self, results, *args, **kwargs) -> list[EvaluationOutput]:
         results = np.asarray(results, dtype=float)
 
         sample = ot.Sample(results)
@@ -373,18 +386,17 @@ class PolynomialChaos(UQMethod):
      :param n_metamodel_samples: number of cheap evaluations of the trained model used to obtain the statistics
      """
 
-    def __init__(self, n_evaluations: int, seed: int = None, degree: int = 3, n_metamodel_samples: int = 10000):
+    def __init__(self, degree: int = 3, n_metamodel_samples: int = 10000, **kwargs):
         self.degree = degree
         self.n_metamodel_samples = n_metamodel_samples
-        self._metamodel_input: Optional[ot.Sample] = None
-        super().__init__(n_evaluations, seed)
+        super().__init__(**kwargs)
 
     def n_terms(self, param_space: StochasticParameterSpace) -> int:
         """Number of terms in the expansion, i.e. the minimum number of samples needed to fit it"""
         enumerate_function = ot.LinearEnumerateFunction(param_space.n_parameters)
-        return int(enumerate_function.getStrataCumulatedCardinal(self.degree))
+        return enumerate_function.getBasisSizeFromTotalDegree(self.degree)
 
-    def _validate(self, param_space: StochasticParameterSpace):
+    def validate(self, param_space: StochasticParameterSpace):
         """Check the expansion can be fitted from the budget"""
         n_terms = self.n_terms(param_space)
         if self.n_evaluations < n_terms:
@@ -392,25 +404,23 @@ class PolynomialChaos(UQMethod):
                              f'parameters has {n_terms} terms, so it needs at least that many samples to fit: '
                              f'n_evaluations = {self.n_evaluations}')
 
-    def _draw_samples(self, param_space: StochasticParameterSpace) -> np.ndarray:
+    @staticmethod
+    def _draw_samples(param_space: StochasticParameterSpace, n_evaluations: int) -> np.ndarray:
         """Draw samples with LHS method"""
-        self._validate(param_space)
-        samples = param_space.get_lhs_samples(self.n_evaluations)
-        self._metamodel_input = param_space.joint_dist.getSample(self.n_metamodel_samples)
-        return samples
+        return param_space.get_random_samples(n_evaluations)
 
-    def _get_metamodel_input(self, param_space: StochasticParameterSpace) -> ot.Sample:
-        """Get samples used for evaluating the surrogate model"""
-        self.get_samples(param_space)
-        return self._metamodel_input
+    @staticmethod
+    def make_polynomials(distribution: ot.JointDistribution) -> list:
+        return [ot.StandardDistributionPolynomialFactory(distribution.getMarginal(i))
+                for i in range(distribution.getDimension())]
 
     def _build_algorithm(self, param_space: StochasticParameterSpace, input_sample: ot.Sample, output_sample: ot.Sample) -> ot.FunctionalChaosAlgorithm:
         """Train surrogate model with the least-squares method"""
+        self.validate(param_space)
         distribution = param_space.joint_dist
         dimension = distribution.getDimension()
 
-        polynomials = [ot.StandardDistributionPolynomialFactory(distribution.getMarginal(i))
-                       for i in range(dimension)]
+        polynomials = self.make_polynomials(distribution)
         enumerate_function = ot.LinearEnumerateFunction(dimension)
         basis = ot.OrthogonalProductPolynomialFactory(polynomials, enumerate_function)
 
@@ -419,11 +429,13 @@ class PolynomialChaos(UQMethod):
         return ot.FunctionalChaosAlgorithm(input_sample, output_sample, distribution,
                                            adaptive_strategy, projection_strategy)
 
-    def process_results(self, results: np.ndarray, param_space: StochasticParameterSpace) -> list[EvaluationOutput]:
-        results = np.asarray(results, dtype=float)
+    def process_results(self, results, param_space: Optional[StochasticParameterSpace]=None, *args, **kwargs) -> list[EvaluationOutput]:
+        if param_space is None:
+            raise RuntimeError('Parameter space not specified')
 
+        results = np.asarray(results, dtype=float)
         input_sample = ot.Sample(self.get_samples(param_space))
-        metamodel_input = self._get_metamodel_input(param_space)
+        metamodel_input = ot.Sample(self.get_samples(param_space, self.n_evaluations))
 
         outputs = []
         for i_out in range(results.shape[1]):
@@ -446,3 +458,216 @@ class PolynomialChaos(UQMethod):
 
     def __repr__(self) -> str:
         return 'Polynomial Chaos Expansion'
+
+
+class AdaptiveUQMethod(UQMethod):
+    def __init__(self, n_add: int=5, **kwargs):
+        if n_add <= 0:
+            raise ValueError('n_add must be positive')
+        self.n_add = n_add
+        super().__init__(**kwargs)
+
+    @property
+    def adaptive_uq_method(self) -> bool:
+        return True
+
+    @property
+    def eval_kwargs(self) -> dict:
+        return {}
+
+    @staticmethod
+    def _draw_samples(param_space: StochasticParameterSpace, n_evaluations: int) -> np.ndarray:
+        sequence = ot.SobolSequence(param_space.n_parameters)
+        return param_space.get_samples_from_qmc(sequence, n_evaluations)
+
+
+class AdaptivePolynomialChaos(AdaptiveUQMethod):
+    """Adaptive sparse PCE"""
+
+    def __init__(self, init_degree: int = 1, threshold: float = 0.95,
+                 n_metamodel_samples: int = 10000, hyperbolic_trunc: bool = False, max_degree: int=30,
+                 max_size: Optional[float] = 1e5, q_early_stop: bool = True, **kwargs):
+        self.init_degree = init_degree
+        self.threshold = threshold
+        self.n_metamodel_samples = n_metamodel_samples
+        self.hyperbolic_trunc = hyperbolic_trunc
+        self.max_size = max_size
+        self.q_early_stop = q_early_stop
+        self.max_degree = max_degree
+
+        self._q_norms = [0.4, 0.5, 0.6, 0.75, 1.0]
+
+        super().__init__(**kwargs)
+
+    @property
+    def q_norms(self):
+        if self.hyperbolic_trunc:
+            return self._q_norms
+        return [1.0]
+
+    @q_norms.setter
+    def q_norms(self, q_norms: list[float]):
+        self._q_norms = q_norms
+
+    @property
+    def eval_kwargs(self) -> dict:
+        return dict(degrees=None, r2_array=None, chaos_results=None, qs=None)
+
+    def _build_algorithm(self, param_space: StochasticParameterSpace, x_train: ot.Sample,
+                         y_train: ot.Sample, degree: int, q: float,
+                         polynomials: Optional[list] = None,
+                         *args, **kwargs) -> ot.FunctionalChaosAlgorithm:
+        """Sparse PCE"""
+        distribution = param_space.joint_dist
+        dimension = distribution.getDimension()
+        if polynomials is None:
+            polynomials = PolynomialChaos.make_polynomials(distribution)
+        if self.hyperbolic_trunc:
+            enumerate_function = ot.HyperbolicAnisotropicEnumerateFunction(dimension, q)
+        else:
+            enumerate_function = ot.LinearEnumerateFunction(dimension)
+        n_terms = enumerate_function.getBasisSizeFromTotalDegree(degree)
+        basis = ot.OrthogonalProductPolynomialFactory(polynomials, enumerate_function)
+        adaptive_strategy = ot.FixedStrategy(basis, n_terms)
+
+        selection = ot.LeastSquaresMetaModelSelectionFactory(ot.LARS(), ot.CorrectedLeaveOneOut())
+        projection_strategy = ot.LeastSquaresStrategy(selection)
+        return ot.FunctionalChaosAlgorithm(x_train, y_train, distribution,
+                                           adaptive_strategy, projection_strategy)
+
+    def _fit(self, param_space, x_train, y_obj, degree, q, polynomials):
+        """Fit one candidate PCE"""
+        try:
+            algorithm = self._build_algorithm(param_space, x_train, y_obj, degree, q,
+                                              polynomials=polynomials)
+            algorithm.run()
+            result = algorithm.getResult()
+            history = result.getErrorHistory()
+            q2 = 1.0 - min(history) if len(history) > 0 else -np.inf
+            return (q2 if np.isfinite(q2) else -np.inf), result
+        except Exception:
+            return -np.inf, None
+
+    def train_and_validate(self, samples: Any, outputs: Any,
+                           param_space: StochasticParameterSpace, *,
+                           degrees=None, r2_array=None, chaos_results=None, qs=None):
+        x_train = ot.Sample(np.asarray(samples))
+        y_train = ot.Sample(np.asarray(outputs).reshape(len(outputs), -1))
+        n_obj = y_train.getDimension()
+        n_samples, dim = x_train.getSize(), x_train.getDimension()
+
+        # Initialize fresh evaluation lists or reuse from previous run
+        if degrees is None or len(degrees) != n_obj:
+            degrees = np.full(n_obj, self.init_degree, dtype=int)
+        degrees = np.asarray(degrees, dtype=int).copy()
+
+        if r2_array is None or len(r2_array) != n_obj:
+            r2_array = np.full(n_obj, -np.inf)
+        r2_array = np.asarray(r2_array, dtype=float).copy()
+
+        if chaos_results is None or len(chaos_results) != n_obj:
+            chaos_results = [None] * n_obj
+        chaos_results = list(chaos_results)
+
+        if qs is None or len(qs) != n_obj:
+            qs = np.full(n_obj, np.nan)
+        qs = np.asarray(qs, dtype=float).copy()
+
+        # Helpers
+        polynomials = PolynomialChaos.make_polynomials(param_space.joint_dist)
+        q_values = np.sort(np.asarray(self.q_norms, dtype=float))
+        max_size = np.inf if self.max_size is None else self.max_size
+        sizes = {}
+
+        def size_of(p, q):
+            if (p, q) not in sizes:
+                enum = ot.HyperbolicAnisotropicEnumerateFunction(dim, q)
+                sizes[(p, q)] = enum.getBasisSizeFromTotalDegree(p)
+            return sizes[(p, q)]
+
+        # Degree and q sweep per metric
+        for j in range(n_obj):
+            # converged in earlier round
+            if r2_array[j] >= self.threshold:
+                continue
+
+            y_obj = y_train.getMarginal(j)
+
+            # nan policy
+            if not np.all(np.isfinite(np.asarray(y_obj))):
+                r2_array[j] = 1.0
+                continue
+
+            # Reuse results from previous run
+            start = int(np.clip(degrees[j], self.init_degree, self.max_degree))
+            best_q2, p_hist = -np.inf, []
+
+            # Degree loop
+            for degree in range(start, self.max_degree + 1):
+                best_q2_p, q_hist, prev_size = -np.inf, [], None
+
+                # q loop
+                for q in q_values:
+                    size = size_of(degree, q)
+                    # Candidate basis too large
+                    if size > max_size:
+                        break
+
+                    q2, result = self._fit(param_space, x_train, y_obj, degree, q, polynomials)
+                    q_hist.append(q2)
+
+                    best_q2_p = max(best_q2_p, q2)
+                    if q2 > best_q2:
+                        best_q2 = q2
+                        chaos_results[j], degrees[j], qs[j] = result, degree, q
+                    if best_q2 >= self.threshold:
+                        break
+                    if self.q_early_stop and self._dropped_twice(q_hist):
+                        break
+
+                if not q_hist or best_q2 >= self.threshold:
+                    break
+                p_hist.append(best_q2_p)
+                if self._dropped_twice(p_hist):
+                    break
+
+            r2_array[j] = best_q2
+
+        eval_kwargs = dict(degrees=degrees, r2_array=r2_array,
+                           chaos_results=chaos_results, qs=qs)
+
+        converged = bool(np.all(r2_array >= self.threshold))
+
+        if converged:
+            print(f'Degrees: {degrees}, q: {qs}, evaluations: {n_samples}')
+            return True, x_train, eval_kwargs
+        else:
+            n_tot = x_train.getSize() + self.n_add
+            new_samples = self.get_samples(param_space, n_tot)
+            return False, new_samples, eval_kwargs
+
+    @staticmethod
+    def _dropped_twice(hist) -> bool:
+        return len(hist) >= 3 and hist[-1] <= hist[-2] <= hist[-3]
+
+    def process_results(self, results, param_space: Optional[StochasticParameterSpace]=None,
+                        chaos_results: Optional[List[Optional[ot.FunctionalChaosResult]]]=None, *args, **kwargs) -> list[EvaluationOutput]:
+
+        if param_space is None or chaos_results is None:
+            raise ValueError('param_space and results are required')
+
+        metamodel_input = self.get_samples(param_space, self.n_metamodel_samples)
+
+        outputs = []
+        for result in chaos_results:
+            # Execute nan policy
+            if result is None:
+                samples = ot.Sample(np.full((self.n_metamodel_samples, 1), np.nan))
+            else:
+                samples = result.getMetaModel()(metamodel_input)
+
+            outputs.append(StochasticOutput.from_output_samples(samples, result))
+        return outputs
+
+    def __repr__(self) -> str:
+        return 'Adaptive Polynomial Chaos Expansion'

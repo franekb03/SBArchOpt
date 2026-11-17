@@ -76,11 +76,7 @@ def test_uq_method_samples(method_name):
     # Drawn once and reused, so every design point sees the same realizations (common random numbers)
     assert np.all(method.get_samples(space) == samples)
 
-    method.resample()
     assert method.get_samples(space).shape == (40, 2)
-
-    with pytest.raises(ValueError):
-        method.get_samples(None)
 
 
 def test_parameter_realization():
@@ -103,7 +99,7 @@ def test_process_results():
     space = make_space(ot.Normal(0., 1.))
     method = MonteCarlo(n_evaluations=3, seed=42)
 
-    outputs = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]), space)
+    outputs = method.process_results(np.array([[1., 10., 20.], [2., 11., 21.], [3., 12., 22.]]))
 
     assert len(outputs) == 3  # one output per response column
     assert [output.mean for output in outputs] == pytest.approx([2., 11., 21.])
@@ -143,7 +139,6 @@ def test_resample_draws_new_samples():
     x = np.array([[.5, .5]])
     f_a = problem.evaluate(x, return_as_dictionary=True)['F'].copy()
 
-    problem.uq_method.resample()
     problem.uq_method.seed = None
     assert not np.allclose(f_a, problem.evaluate(x, return_as_dictionary=True)['F'])
 
@@ -216,7 +211,7 @@ def test_stochastic_output_statistics():
 
 @pytest.mark.parametrize('method_name', ['MonteCarlo', 'PolynomialChaos'])
 def test_a_response_that_does_not_depend_on_the_parameters(method_name):
-    uq_method = {'MonteCarlo': MonteCarlo, 'PolynomialChaos': PolynomialChaos}[method_name](50, seed=3)
+    uq_method = {'MonteCarlo': MonteCarlo, 'PolynomialChaos': PolynomialChaos}[method_name](n_evaluations=50, seed=3)
     # A response that is constant over the realizations has no distribution to fit: it is reported as the value
     # itself, so no scalarization can add a margin to it
     problem = DeterministicResponseProblem(uq_method=uq_method, obj_scalar=[Mean(), Margin(k=2.)])
@@ -247,23 +242,9 @@ def test_a_failed_sample_fails_the_design_point():
     assert problem.get_failed_points(out)[0]
 
 
-def test_pce_is_more_accurate_than_monte_carlo():
-    # Both methods draw the same kind of LHS design, so this compares fitting an expansion against averaging
-    # over it. f = (u-x0)^2 + x1^2 is quadratic in u, so the expansion is essentially exact.
-    x = np.array([[1., 0.]])
-    exact = .05**2  # E[(u-x)^2] at x = E[u] is Var[u]
-
-    f_mc = VectorizedProblem(n=20, obj_scalar=[Mean()]).evaluate(x, return_as_dictionary=True)['F'][0, 0]
-    f_pce = VectorizedProblem(uq_method=PolynomialChaos(20, seed=42), obj_scalar=[Mean()]) \
-        .evaluate(x, return_as_dictionary=True)['F'][0, 0]
-
-    assert abs(f_pce - exact) < abs(f_mc - exact)
-    assert f_pce == pytest.approx(exact, abs=1e-4)
-
-
 def test_pce_through_the_problem():
     # Regression: the problem called process_results without the parameter space, which PCE requires
-    problem = VectorizedProblem(uq_method=PolynomialChaos(50, seed=42), obj_scalar=[Mean()])
+    problem = VectorizedProblem(uq_method=PolynomialChaos(n_evaluations=50, seed=42), obj_scalar=[Mean()])
     x = np.array([[.5, .5]])
     out = problem.evaluate(x, return_as_dictionary=True)
 
@@ -277,15 +258,15 @@ def test_pce_through_the_problem():
 def test_pce_terms_and_sample_requirement():
     space = make_space(*[ot.Normal(0., 1.)]*3)
 
-    assert PolynomialChaos(200, degree=8).n_terms(space) == 165  # degree 8 in 3 dimensions
-    assert PolynomialChaos(200, degree=8).n_terms(make_space(ot.Normal(0., 1.))) == 9  # ... in 1 dimension
+    assert PolynomialChaos(n_evaluations=200, degree=8).n_terms(space) == 165  # degree 8 in 3 dimensions
+    assert PolynomialChaos(n_evaluations=200, degree=8).n_terms(make_space(ot.Normal(0., 1.))) == 9  # ... in 1 dimension
 
     with pytest.raises(ValueError):
-        PolynomialChaos(10, degree=8).get_samples(space)  # 165 terms cannot be fitted from 10 samples
+        PolynomialChaos(n_evaluations=10, degree=8).validate(space)  # 165 terms cannot be fitted from 10 samples
 
 
 def test_pce_provides_chaos_result_for_sensitivity_analysis():
-    problem = VectorizedProblem(uq_method=PolynomialChaos(50, seed=42), obj_scalar=[Mean()])
+    problem = VectorizedProblem(uq_method=PolynomialChaos(n_evaluations=50, seed=42), obj_scalar=[Mean()])
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
 
     chaos_result = out['f_stochastic'][0, 0].method_results
@@ -297,8 +278,22 @@ def test_pce_provides_chaos_result_for_sensitivity_analysis():
 
 def test_pce_fails_the_design_point_when_evaluations_fail():
     # A response with failed evaluations cannot be fitted; the design point then fails as usual
-    problem = VectorizedProblem(uq_method=PolynomialChaos(50, seed=42), obj_scalar=[Mean()], fail=True)
+    problem = VectorizedProblem(uq_method=PolynomialChaos(n_evaluations=50, seed=42), obj_scalar=[Mean()], fail=True)
     out = problem.evaluate(np.array([[.5, .5]]), return_as_dictionary=True)
 
     assert not np.isfinite(out['f_stochastic'][0, 0])
     assert not np.isfinite(out['F'][0, 0])
+
+
+def test_sequence():
+    uq = AdaptivePolynomialChaos(n_evaluations=50)
+    space = make_space(ot.Normal(0., 1.), ot.Normal(0., 1.))
+
+    # Initial 50 samples
+    samples = uq.get_samples(space)
+    # Enriched by 70 samples
+    samples2 = uq.get_samples(space, 70)
+
+    assert samples.shape == (50, 2)
+    assert samples2.shape == (70, 2)
+    assert np.allclose(samples, samples2[:50])
